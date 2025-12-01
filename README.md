@@ -34,11 +34,11 @@ Citation: _Monllor-Berbegal et al. 2025_ ([A&A](https://doi.org/10.1051/0004-636
     * $\delta > \delta_\text{2}$
 3. After the previous step, the code obtains a set of overlapping cubes covering all regions potentially belonging to a void. The next step consists of merging these cubes in a volume-ordered way, starting with the biggest, such that voids are built all synchronously, starting by the core regions (biggest cubes) until reaching the boundaries (smaller cubes).
 
-This process can be repeated at different levels of resolution using finer grids, leading to a list of voids-in-voids. The void finder characteristics, several applications (mock test, cosmological simulation data and galaxy surveys), and a thorough comparison with other void finders can be found in _Monllor-Berbegal et al. 2025 accepted, A&A_ ([ArXiv](https://arxiv.org/abs/2509.25329)). 
+This process can be repeated at different levels of resolution using finer grids, leading to a list of voids-in-voids. The void finder characteristics, several applications (mock test, cosmological simulation data and galaxy surveys), and a thorough comparison with other void finders can be found in _Monllor-Berbegal et al. 2025_. 
 
 ## Repository organisation
 
-The source code can be found inside the `src` folder with all `.f90` files. Several `Python` tools are provided inside the `tools` folder. These are examples to handle simulated and galaxy survey data in order to prepare a proper input for the void finder. Inside `test1` one can find the source code used to create the mock voids test described in _Monllor-Berbegal et al. 2025 accepted, A&A_ ([ArXiv](https://arxiv.org/abs/2509.25329)). Finally, the `config` folder contains `voids.dat`, which is the main configuration file provided to the code. We also give an example `Makefile` and `run.sh` in order to properly compile and execute the code.
+The source code can be found inside the `src` folder with all `.f90` files. Several `Python` tools are provided inside the `tools` folder. These are examples to handle simulated and galaxy survey data in order to prepare a proper input for the void finder. Inside `test1` one can find the source code used to create the mock voids test described in _Monllor-Berbegal et al. 2025_. Finally, the `config` folder contains `voids.dat`, which is the main configuration file provided to the code. We also give an example `Makefile` and `run.sh` in order to properly compile and execute the code.
 
 ## Installation
 
@@ -119,7 +119,7 @@ As of today, the code allows for 4 different types of input:
    * `float32(1:N): Z` (Mpc)
    * `float32(1:N): M` ($M_{\odot}$)
 
-   When this type of input is selected, the code expects a `bin_file_partXXXXX` binary file. The user must specify an `iteration` or `snapshot` number `XXXXX`, as this allow the code to be run on several iterations without stopping. If this feature is not needed (for example analysing a galaxy survey), one can    simply provide **AVISM** with a bin_file_part00001 file and tell the code to find voids just in iteration `1`. Moreover, `bin_file_partXXXXX` files must be inside the `path_to_AVISM/input_data` directory.
+   When this type of input is selected, the code expects a `bin_file_partXXXXX` binary file. The user must specify an `iteration` or `snapshot` number `XXXXX`, as this allow the code to be run on several iterations without stopping. If this feature is not needed (for example analysing a galaxy survey), one can simply provide **AVISM** with a bin_file_part00001 file and tell the code to find voids just in iteration `1`. Moreover, `bin_file_partXXXXX` files must be inside the `path_to_AVISM/input_data` directory.
 
    The python script `tools/uchuu2avism.py` serves as an example to properly prepare a particle input from a simulation output (in this case, a halo catalogue from [Mini-Uchuu](https://www.skiesanduniverses.org/Simulations/Uchuu/). Similarly, `tools/galaxy_survey.py` shows how to prepare a simple galaxy survey input (2MRS [John P. Huchra et al 2012 ApJS 199 26](https://iopscience.iop.org/article/10.1088/0067-0049/199/2/26) in that case), although we strongly recommend preprocessing galaxy surveys with external tools such as [CORAS](https://github.com/rlilow/CORAS), [Neural Networks](https://github.com/rlilow/2MRS-NeuralNet), or utilising constrained simulations of the Local Universe (e.g., see [Manticore-Local](https://arxiv.org/abs/2505.10682)) to obtain full reconstructions/descriptions of the density and velocity fields (non-linear in the last two examples), thus allowing to fully leverage the void finder capabilities. 
 
@@ -189,7 +189,7 @@ min void radius to look for subvoids (in Mpc) -------------------------------->
 3.
 ```
 
-In this block, the physical thresholds for performing the void-finding algorithm are defined. The default values have been rigorously tested, but the user is free to change them. In descending order, and keeping the notation of _Monllor-Berbegal et al. 2025 accepted, A&A_ ([ArXiv](https://arxiv.org/abs/2509.25329)), we have $\delta_1$, $\delta_2$, $\nabla \delta_{th}$ and $\nabla \cdot \mathbf{v}_\text{th}$.
+In this block, the physical thresholds for performing the void-finding algorithm are defined. The default values have been rigorously tested, but the user is free to change them. In descending order, and keeping the notation of _Monllor-Berbegal et al. 2025_, we have $\delta_1$, $\delta_2$, $\nabla \delta_{th}$ and $\nabla \cdot \mathbf{v}_\text{th}$.
 
 ```
 *******************************************************************************
