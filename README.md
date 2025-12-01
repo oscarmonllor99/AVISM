@@ -4,7 +4,7 @@
 
 Developed at the Departament d'Astronomia i Astrofísica of Universitat de València by Óscar Monllor-Berbegal in collaboration with David Vallés-Pérez, Susana Planelles and Vicent Quilis. This work has been supported by the European Union NextGenerationEU (PRTR-C17.I1), the Spanish Ministerio de Ciencia e Innovación(ASFAE/2022/001 and PID2022-138855NB-C33), the Generalitat Valenciana (CIPROM/2022/49), and Óscar Monllor-Berbegal acknowledges support from Universitat de València through an Atracció de Talent fellowship.
 
-Citation: _Monllor-Berbegal et al. 2025 accepted, A&A_ ([ArXiv](https://arxiv.org/abs/2509.25329)). 
+Citation: _Monllor-Berbegal et al. 2025_ ([A&A](https://doi.org/10.1051/0004-6361/202554513)). 
 
 ## Index of contents 
 
@@ -62,6 +62,9 @@ Our code needs few dependencies: a Fortran compiler and OpenMP for shared-memory
 
 * [gfortran](https://gcc.gnu.org/wiki/GFortran)
 * [OpenMP](https://www.openmp.org/)
+* (optional) [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
+
+HDF5 is only used for some kind of input data, such as reading directly from Arepo outputs.
 
 ### Make
 
@@ -73,7 +76,7 @@ make COMP=1
 
 We also provide a debugging option:
 
-```bash
+```
 make COMP=2
 ```
 
