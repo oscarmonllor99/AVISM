@@ -71,6 +71,7 @@
 
        ! FILE
        CHARACTER*50 DIR, FILEO, FILEO1, FILEO2, FILEO3
+       INTEGER :: exit_stat, cmd_stat
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
        ! OMP
@@ -107,6 +108,7 @@
        REAL, ALLOCATABLE :: UBAS(:,:,:)
        REAL :: LPERIODIC(3)
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   
 
 
 !*********************************************************************
@@ -291,6 +293,15 @@
        !$!$ Assume output written in dir "output_files"
        !$!$ Finder details will be written on the catalogue file
        DIR = 'output_files'
+
+       !$!$ Create DIR if it does not exist
+       call execute_command_line("mkdir -p " // trim(DIR), exitstat=exit_stat, cmdstat=cmd_stat)
+
+       ! Check if the command worked (optional but recommended)
+       if (exit_stat /= 0) then
+         print *, "Error: Could not create output directory: " // trim(DIR)
+         stop
+       end if
 
        !$!$ initial prints
        IF (FLAG_DATA .EQ. 0) THEN
@@ -487,7 +498,7 @@
          IF (FLAG_STOP .GE. 1) WRITE(*,*)
          IF (FLAG_STOP .GE. 1) WRITE(*,*)
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'Particles outside the bounding box! Check L0!'
-         IF (FLAG_STOP .GE. 1) WRITE(*,*)
+         IF (FLAG_STOP .GE. 1) WRITE(*,*) 'Particles must be inside [-L0/2, L0/2] in each direction.'
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'STOPPING...'
          IF (FLAG_STOP .GE. 1) WRITE(*,*)
          IF (FLAG_STOP .GE. 1) STOP
@@ -939,6 +950,7 @@
                   CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS)
                   DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
                ENDIF
+               
             ENDIF
 
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

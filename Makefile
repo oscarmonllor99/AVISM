@@ -54,6 +54,9 @@ EXEC=avism.x
 # OBJECTS
 OBJ=commondata.o kdtree.o particles.o voidfinding.o avism.o
 
+# Just to show the final executable when typing 'make'
+all: $(EXEC)
+
 # make sure that ./bin/ folder exists before any .o goes there
 $(addprefix $(BINDIR)/, $(OBJ)): | $(BINDIR)
 
