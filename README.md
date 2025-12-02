@@ -68,21 +68,48 @@ HDF5 is only used for some kind of input data, such as reading directly from Are
 
 ### Make
 
-We already provide the user with an example Makefile to compile the code. Inside the root directory, where we can find `src` and `bin`, one can compile the code by simply running
+We already provide a Makefile example for compiling the code. Inside the root directory, the `src` and `bin` folders should exist. Inside `src`, all source files used to compile the code can be found. The `bin` folder, which will be automatically created when compiling, will contain all `.o` (object files) created. Taking this into account, the code can be directly compiled as follows:
 
 ```
 make COMP=1
 ```
 
-We also provide a debugging option:
+This option utilises the `gfortran` compiler together with the following flags: `-O2 -mcmodel=medium -fopenmp -mieee-fp -ftree-vectorize -march=native -funroll-loops`
+
+A debugging option is also provided:
 
 ```
 make COMP=2
 ```
 
-Both options will create the `avism.x` executable inside the root directory.
+This choice also uses `gfortran` together with the following flags: `-O0 -g -mcmodel=medium -fopenmp -mieee-fp -ftree-vectorize -march=native -fcheck=all -fbounds-check -fbacktrace -ffpe-trap=invalid,zero,overflow` 
 
-Furthermore, two more compilation options are available: `HDF5` (defaults to 0) and `PERIODIC` (defaults to 0). The first specifies if the [HDF5](https://www.hdfgroup.org/) library is needed (`HDF5=1` ) to read the input data. The second tells the code to use periodic boundary conditions (`PERIODIC=1`), if needed.
+Both options will create the `avism.x` executable inside the root directory. By default, the code will choose `COMP=1` if no value for `COMP` is provided when compiling.
+
+**The `Makefile` can be customised if the user needs another `Fortran` compiler (e.g., `ifort`) or other flag configuration.**
+
+Furthermore, two more compilation options are available: `HDF5` (defaults to 0) and `PERIODIC` (defaults to 0). The first specifies if the [HDF5](https://www.hdfgroup.org/) library is needed (`HDF5=1`) to read the input data. At the time of writing, the code only needs HDF5 if an Arepo output is used as input for the void finder. The second tells the code to use periodic boundary conditions (`PERIODIC=1`) if the input data requires it (e.g., entire cosmological simulation boxes).
+
+This would be a compilation example with periodic boundary conditions and debugging:
+
+```
+make COMP=2 PERIODIC=1
+```
+
+This would be a compilation example with `HDF5` included (see `COMP=1` is not needed, as it is the default)
+
+```
+make HDF5=1
+```
+
+Lastly, [HDF5](https://www.hdfgroup.org/) has to be properly linked inside the `Makefile` if `HDF5=1`. The user may have to change the following lines, telling the compiler where the HDF5 `include` and `lib` folders are located:
+
+```
+ifeq ($(HDF5),1)
+ INC += -I/usr/include/hdf5/serial/
+ LIBS += -L/usr/lib/x86_64-linux-gnu/hdf5/serial/ -lhdf5_serial_fortran -lhdf5hl_fortran
+endif
+```
 
 ## Running the code
 
@@ -121,9 +148,11 @@ As of today, the code allows for 4 different types of input:
 
    When this type of input is selected, the code expects a `bin_file_partXXXXX` binary file. The user must specify an `iteration` or `snapshot` number `XXXXX`, as this allow the code to be run on several iterations without stopping. If this feature is not needed (for example analysing a galaxy survey), one can simply provide **AVISM** with a bin_file_part00001 file and tell the code to find voids just in iteration `1`. Moreover, `bin_file_partXXXXX` files must be inside the `path_to_AVISM/input_data` directory.
 
+   **All particle positions `x,y,z` must lie in the `(-L/2, L/2)` range, with `L` the side of the data cube. This is especially important if `PERIODIC=1`, as periodicity will be assumed in the `(-L/2, L/2)` range for all three cartesian directions.**
+
    The python script `tools/uchuu2avism.py` serves as an example to properly prepare a particle input from a simulation output (in this case, a halo catalogue from [Mini-Uchuu](https://www.skiesanduniverses.org/Simulations/Uchuu/). Similarly, `tools/galaxy_survey.py` shows how to prepare a simple galaxy survey input (2MRS [John P. Huchra et al 2012 ApJS 199 26](https://iopscience.iop.org/article/10.1088/0067-0049/199/2/26) in that case), although we strongly recommend preprocessing galaxy surveys with external tools such as [CORAS](https://github.com/rlilow/CORAS), [Neural Networks](https://github.com/rlilow/2MRS-NeuralNet), or utilising constrained simulations of the Local Universe (e.g., see [Manticore-Local](https://arxiv.org/abs/2505.10682)) to obtain full reconstructions/descriptions of the density and velocity fields (non-linear in the last two examples), thus allowing to fully leverage the void finder capabilities. 
 
-3. **Grid input:** `Option 2`
+4. **Grid input:** `Option 2`
    
    If an AMR simulation snapshot is previosly processed and transformed into a uniform grid or if, for instance, the reconstruction of the density and velocity fields from a galaxy survey has been carried out by an external tool on a uniform grid, the user may need to apply **AVISM** directly on this data structure. In this case, the grid input must provide the following information:
    
@@ -137,13 +166,17 @@ As of today, the code allows for 4 different types of input:
 
    When this type of input is selected, the code expects a `bin_file_gridXXXXX` binary file inside the `path_to_AVISM/input_data` directory. In analogy to the particle input, the user must specify an `iteration` or `snapshot` number `XXXXX` but, if this feature is not needed, one can simply provide **AVISM** with a bin_file_grid00001 and tell the code to find voids just in iteration `1`.
 
+   See the user does not have to specify `(N_x, N_y, N_z)` inside the `bin_file_gridXXXXX` input file. The grid size will be specified inside the `config.dat` configuration file (see below, at **Run configuration**).
+
    The python scripts `tools/linear2M++_2_avism.py` and `tools/manticore2avism.py` serve as examples to properly prepare a grid input from a full linear reconstruction ([2M++_linear](https://cosmicflows.iap.fr/)) and a non-linear constrained simulation ([Manticore-Local](https://arxiv.org/abs/2505.10682))), respectively, of the Local Universe consisting of a uniform grid with the density and velocity fields defined.
 
-4. **Arepo input:** `Option 3`
+5. **Arepo input:** `Option 3`
 
    A reader for [Arepo](https://arepo-code.org/) cosmological simulations (particularly the [IllustrisTNG](https://www.tng-project.org/) suite) is provided. This way, the user can give as input to the void finder all gas or dark matter particles from a snapshot. Care must be taken, however, as the [HDF5](https://www.hdfgroup.org/) library has to be properly installed and linked inside the Makefile. If this input is chosen, input files should be inside `path_to_AVISM/simu_arepo`.
 
-   Note that, in order to use all dark matter or gas particles from Arepo's simulation, the internal AVISM reader (`Option 3`) has to be used. The TNG readers inside `tools` are just examples to handle [IllustrisTNG](https://www.tng-project.org/) halo catalogues to prepare a particle (`Option 2`) input.
+   This option must only be used for directly reading data from Arepo's output and, hence, uses raw simulation data, such as dark matter or gas particles, as input. This kind of usage is very different than utilising the TNG readers inside `tools`, which are just examples to handle [IllustrisTNG](https://www.tng-project.org/) halo catalogues to prepare a *generic* particle-like (`Option 2`) input.
+
+   **In this case, no treatment on particle positions is required, as AVISM internally transforms them to the (-L/2, L/2) range.**
 
 ## Run configuration
 
@@ -167,7 +200,9 @@ periodic boundary conditions -> 0: no, 1: yes -------------------------------->
 1
 ```
 
-In this first block, the user must specify the iteration range, where `first` is the first iteration to be processed and `last` is the last one, in steps of `every`. Next, if voids-in-voids are required, $\ell_{min}$ and $\ell_{max}$ levels must be introduced, with the grid size $N_x, N_y, N_z$ corresponding to the coarser grid ($\ell_{min}$), gaining a factor of 2 in resolution as we go up in levels. If the user only needs a void population, a single level $\ell_{min} = \ell_{max}$ can be introduced, with a proper resolution. Last, $h$, $\Omega_m$ and $L$ are specified, with $L$ the size of the bounding box, and periodic boundary conditions can be activated.
+In this first block, the user must specify the iteration range, where `first` is the first iteration to be processed and `last` is the last one, in steps of `every`. Next, if voids-in-voids are required, $\ell_{min}$ and $\ell_{max}$ levels must be introduced, with the grid size $N_x, N_y, N_z$ corresponding to the coarser grid ($\ell_{min}$), gaining a factor of 2 in resolution as we go up in levels. If the user only needs a single void population (without hierarchy), a single level $\ell_{min} = \ell_{max}$ can be introduced, with a proper resolution. Last, $h$, $\Omega_m$ and $L$ are specified, with $L$ the size of the bounding box, and periodic boundary conditions can be activated.
+
+**As stated before, $L$ should be defined such that all particles lie in the `(-L/2, L/2)` range in all `x,y,z` directions**.
 
 ```
 *******************************************************************************
@@ -189,7 +224,7 @@ min void radius to look for subvoids (in Mpc) -------------------------------->
 3.
 ```
 
-In this block, the physical thresholds for performing the void-finding algorithm are defined. The default values have been rigorously tested, but the user is free to change them. In descending order, and keeping the notation of _Monllor-Berbegal et al. 2025_, we have $\delta_1$, $\delta_2$, $\nabla \delta_{th}$ and $\nabla \cdot \mathbf{v}_\text{th}$.
+In this block, the physical thresholds for performing the void-finding algorithm are defined. The default values have been rigorously tested, but the user is free to change them. First, the user must specify a maximum number of voids for dimensioning variables. Then, in descending order and keeping the notation of _Monllor-Berbegal et al. 2025_, we have $\delta_1$, $\delta_2$, $\nabla \delta_{th}$ and $\nabla \cdot \mathbf{v}_\text{th}$. Finally, the minimum effective radius to keep a void and the minimum effective radius to look for the subvoids therein must be specified.
 
 ```
 *******************************************************************************
@@ -203,7 +238,7 @@ IF AREPO data: files per snapshot, PartType (1:gas, 2:dm), DM mass (Msun) ---->
 100,2,470000000.0
 ```
 
-Here, the user must specify the input data format and, in the case of using `Option 0` or `2`, the input grid size should be supplied, with the previous $N_x, N_y, N_z$ values in `General parameters block` being ignored. On the other hand, if 'Option 3' is chosen (that is, Arepo data), the user must specify the number of files per snapshot, the particle type used as matter tracer and the dark matter particle mass if 'PartType=2'.
+Here, the user must specify the input data format and, in the case of using `Option 0` or `2`, the input grid size should be supplied, with the previous $N_x, N_y, N_z$ values in `General parameters block` being ignored. On the other hand, if 'Option 3' is chosen (that is, Arepo data), the user must specify the number of files per snapshot, the particle type (`PartType`) used as matter tracer and the dark matter particle mass if `PartType=2`.
 
 ```
 *******************************************************************************
@@ -221,12 +256,21 @@ Number of nearest neighbours to use to transform into grid ------------------->
 32
 ```
 
-Particle data can be handled in different ways, as the code allows for different velocity and density interpolations. We recommend, however, the SPH option, as it is well-optimized and tested, yielding better results than the TSC kernel. Here, the user must also specify if the particle velocity field is available and the number $N_\text{ngh}$ of nearest neighbours to use for the SPH interpolation. Depending on the grid size and the amount of particles provided as input, this quantity could be changed accordingly, although $N_\text{ngh} = 32$ is a proper value for a balanced case in which cells and particles are approximately in the same number.
+In this part, the user must specify the particle-handling parameters. First, the maximum number of particles allowed to read should be introduced for the dimensioning of variables. The code allows for different velocity and density interpolations. We recommend, however, the SPH option, as it is well-optimized and tested, yielding better results than the TSC kernel. Here, the user must also specify if the particle velocity field is available and the number $N_\text{ngh}$ of nearest neighbours to use for the SPH interpolation. Depending on the grid size and the amount of particles provided as input, this quantity could be changed accordingly, although $N_\text{ngh} = 32$ is a proper value for a balanced case in which cells and particles are approximately in the same number.
 
+```
+*******************************************************************************
+*       Output management parameters
+*******************************************************************************
+whether to write cubes that are merged to form voids -> 0: no, 1: yes --->
+0
+```
+
+This option tells the code to save a `cubesXXXXX` file for each iteration `XXXXX` with all cubes that were created by the void-finding procedure that are later merged to form the final set of voids.
 
 ## Output
 
-**AVISM** provides two main output files: `voidsXXXXX` and `mapXXXXX`. 
+**AVISM** provides two main output files: `voidsXXXXX` and `mapXXXXX` (and optionally `cubesXXXXX`) that are saved inside the `output_files` folder (automatically created by the code inside `avism.x` folder). 
 
 ### `voidsXXXXX`
 
@@ -282,7 +326,7 @@ Below, we provide three tables (one for each type of information given in `voids
 | $X$, $Y$, $Z$| Void centre coordinates, defined as the centre of the biggest cube belonging to it |
 | $X_G$, $Y_G$, $Z_G$| Void volume-weighed (geometrical) centre |
 | Vol | Void total volume (in $\text{Mpc}^3$) |
-| $R$ | Void effective radius (in Mpc)|
+| $R$ | Void effective radius (in $\text{Mpc}$)|
 | $\overline{\rho}$ | Mean density (in matter background density units) inside the void |
 | $\epsilon$ | Void ellipticity |
 | IP | Void inverse porosity |
@@ -307,6 +351,7 @@ float32(1:NX,1:NY,1:NZ): DIVERGENCE
      
  (for all levels, without spacing between blocks)
 ```
+Note `NX,NY,NZ` will vary in factors of 2 with increasing hierarchy level.
 
 Below, we provide a brief description of the fields:
 
@@ -316,7 +361,48 @@ Below, we provide a brief description of the fields:
 | DELTA | Density contrast field ($\delta$) utilised by the void-finding algorithm at this level |
 | DIVERGENCE | Velocity divergence field ($\nabla \cdot \mathbf{v}$) utilised by the void-finding algorithm at this level |
 
+### `cubesXXXXX`
+
+The `cubesXXXXX` file contains all cubes that were created by the void-finding procedure that are later merged to form the final set of voids. The structure of the file is as follows:
+
+----------------------------------------------------------------------------------
+
+* $N_\ell$ /  $\ell_{min}$ /  $\ell_{max}$ 
+  
+   - $\ell$ / $N_{cubes}$ / $N_{voids}$ 
+     
+      - ID / UVOID / $I_{min}$ / $I_{max}$ / $J_{min}$ / $J_{max}$ / $K_{min}$ / $K_{max}$ / $X_{min}$ / $X_{max}$ / $Y_{min}$ / $Y_{max}$ / $Z_{min}$ / $Z_{max}$
+        
+        .
+        .
+        .
+        
+        (for all cubes at this level)
+
+      .
+      .
+      .
+     
+      (for all levels)
+
+---------------------------------------------------------------------------------- 
+
+While the header variables are the same as in `voidsXXXXX`, below we explain the remaining quantities describing each cube:
+
+| Cube property  | Description |
+| ------------- | ------------- |
+| ID | Cube ID in order of creation |
+| UVOID | ID of cube to which it was merged or -1 if cubes were merged to it (and thus this ID becomes a void) |
+| $I_{min}$, $I_{min}$ | Cube extension in x cells |
+| $J_{min}$, $J_{min}$ | Cube extension in y cells |
+| $K_{min}$, $K_{min}$ | Cube extension in z cells |
+| $X_{min}$, $X_{min}$ | Real space extension of cube in x direction |
+| $Y_{min}$, $Y_{min}$ | Real space extension of cube in y direction |
+| $Z_{min}$, $Z_{min}$ | Real space extension of cube in z direction |
 
 ### read_voids.py
 
-Inside `tools` the user can find `read_voids.py`. This reader helps load **AVISM**'s output into Python for analysis or further post-processing. 
+Inside `tools` the user can find `read_voids.py`. This reader helps load **AVISM**'s output files (`voids`, `cubes` and `map`) into Python for analysis or further post-processing. The functions inside this tool can further help to understand AVISM output structure:
+
+
+
