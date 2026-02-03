@@ -269,14 +269,14 @@ SUBROUTINE READ_MASCLET(ITER, NDXYZ0, NL, T, ZETA) !output
         READ(31) (((U2G(I,J,K),I=1,N1),J=1,N2),K=1,N3)
         READ(31) (((U3G(I,J,K),I=1,N1),J=1,N2),K=1,N3)
         READ(31) (((U4G(I,J,K),I=1,N1),J=1,N2),K=1,N3)
-        READ(31) !(((PRES(I,J,K),K=1,N3),J=1,N2),I=1,N1)
-        READ(31) !(((POT(I,J,K),K=1,N3),J=1,N2),I=1,N1)
-        READ(31) !(((OPOT(I,J,K),K=1,N3),J=1,N2),I=1,N1)
+        READ(31) 
+        READ(31) 
+        READ(31) 
         !IF COOLING ACTIVATED
-        READ(31) !(((TEMP(I,J,K),K=1,N3),J=1,N2),I=1,N1)
-        READ(31) !(((MET(I,J,K),K=1,N3),J=1,N2),I=1,N1)
+        READ(31) 
+        READ(31) 
         !!!!!!!!
-        READ(31) !(((CR0AMR(I,J,K),K=1,N3),J=1,N2),I=1,N1)
+        READ(31) 
         !IF MAGNETIC FIELD CONSIDERED
         !READ(31)
         !READ(31)
@@ -298,15 +298,15 @@ SUBROUTINE READ_MASCLET(ITER, NDXYZ0, NL, T, ZETA) !output
         READ(31) (((U12G(IX,J,K,I),IX=1,N1),J=1,N2),K=1,N3)
         READ(31) (((U13G(IX,J,K,I),IX=1,N1),J=1,N2),K=1,N3)
         READ(31) (((U14G(IX,J,K,I),IX=1,N1),J=1,N2),K=1,N3)
-        READ(31) !(((PRES1(IX,I,J,K),IX=1,N1),J=1,N2),K=1,N3)
-        READ(31) !(((POT1(IX,I,J,K),IX=1,N1),J=1,N2),K=1,N3)
-        READ(31) !(((OPOT1(IX,I,J,K),IX=1,N1),J=1,N2),K=1,N3)
+        READ(31) 
+        READ(31)
+        READ(31) 
         !IF COOLING ACTIVATED
-        READ(31) !(((TEMP1(IX,I,J,K),IX=1,N1),J=1,N2),K=1,N3)
-        READ(31) !(((MET1(IX,I,J,K),IX=1,N1),J=1,N2),K=1,N3)
+        READ(31) 
+        READ(31) 
         !!!!!!!!
-        READ(31) !(((CR0AMR1(IX,I,J,K),IX=1,N1),J=1,N2),K=1,N3)
-        READ(31) !(((SOLAPST(IX,I,J,K),IX=1,N1),J=1,N2),K=1,N3)
+        READ(31) 
+        READ(31) 
         !IF MAGNETIC FIELD CONSIDERED
         !READ(31)
         !READ(31)
