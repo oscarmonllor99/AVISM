@@ -496,7 +496,7 @@
          !$OMP END PARALLEL
 
          IF (FLAG_STOP .GE. 1) WRITE(*,*)
-         IF (FLAG_STOP .GE. 1) WRITE(*,*)
+         IF (FLAG_STOP .GE. 1) WRITE(*,*) MINVAL(RXPA), MAXVAL(RXPA), MINVAL(RYPA), MAXVAL(RYPA), MINVAL(RZPA), MAXVAL(RZPA)
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'Particles outside the bounding box! Check L0!'
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'Particles must be inside [-L0/2, L0/2] in each direction.'
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'STOPPING...'
@@ -1763,7 +1763,7 @@
       ! Deallocate k-d tree variables (if needed)
       !--------------------------------------- 
        IF (FLAG_KD .EQ. 1) THEN
-         DEALLOCATE(TREE)
+         CALL deallocate_kdtree(TREE)
          DEALLOCATE(TREEPOINTS)
          DEALLOCATE(HPART)
          DEALLOCATE(PART_DENS)
