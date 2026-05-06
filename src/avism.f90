@@ -998,17 +998,17 @@
             IF (IR .LE. 0) THEN
                !dm+gas 
                IF(FLAG_DIV .EQ. 0) THEN 
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIOD)
                   DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIODIC)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIOD)
                   DIVERGCO(1:NXX,1:NYY,1:NZZ) = UBAS
                !dm
                ELSE IF(FLAG_DIV .EQ. 1) THEN
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIOD)
                   DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
                !gas
                ELSE IF(FLAG_DIV .EQ. 2) THEN
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIODIC)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIOD)
                   DIVERGCO(1:NXX,1:NYY,1:NZZ) = UBAS
                ENDIF
             ENDIF
@@ -1041,7 +1041,7 @@
 
                !Particle divergence calculation performed in uniform grid
                IF (FLAG_DIV .EQ. 1 .OR. FLAG_DIV .EQ. 0) THEN
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIOD)
                   DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
                ENDIF
                
@@ -1137,7 +1137,7 @@
             ! Divergence calculation
             !---------------------------------------
 
-            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
+            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIOD)
             DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
 
             !---------------------------------------
@@ -1245,7 +1245,7 @@
             ! WRITE(*,*) MINVAL(U3GCO), MAXVAL(U3GCO)
             ! WRITE(*,*) MINVAL(U4GCO), MAXVAL(U4GCO)
 
-            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIODIC)
+            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIOD)
             DIVERGCO(1:NXX,1:NYY,1:NZZ) = UBAS
             
           ENDIF
@@ -1259,19 +1259,19 @@
           IF(FLAG_DENS .EQ. 1) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO
           IF(FLAG_DENS .EQ. 2) U1CO(1:NXX,1:NYY,1:NZZ) = U1GCO
 
-         !* Until here, density is in rho_background units -> to units of mean density
-          IF(FLAG_DATA .NE. 2) THEN
-            U1CO = U1CO*ROTE
-            MEANDENS = SUM(U1CO(1:NXX,1:NYY,1:NZZ)*SMASK(1:NXX,1:NYY,1:NZZ)) &
-                              / REAL(COUNT(SMASK>0))
-            U1CO = U1CO / MEANDENS !rho/rhomean
-            MEANDENS = MEANDENS * (UM / UL**3)
-            WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
-                        MEANDENS / (RODO * (UM / UL**3))
+         ! !* Until here, density is in rho_background units -> to units of mean density
+         !  IF(FLAG_DATA .NE. 2) THEN
+         !    U1CO = U1CO*ROTE
+         !    MEANDENS = SUM(U1CO(1:NXX,1:NYY,1:NZZ)*SMASK(1:NXX,1:NYY,1:NZZ)) &
+         !                      / REAL(COUNT(SMASK>0))
+         !    U1CO = U1CO / MEANDENS !rho/rhomean
+         !    MEANDENS = MEANDENS * (UM / UL**3)
+         !    WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
+         !                MEANDENS / (RODO * (UM / UL**3))
 
-          ELSE !GRID input overdensity: assumed in rho_background units
-            MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
-          ENDIF
+         !  ELSE !GRID input overdensity: assumed in rho_background units
+         !    MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
+         !  ENDIF
  
          !* Which divergence components to consider
           ALLOCATE(DIVERCO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
@@ -1668,14 +1668,14 @@
 
           !Binary 3D maps 
           !(STREAM -> no headers or structure, open with Numpy)
-          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', status='UNKNOWN', ACCESS = 'STREAM') 
+          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', status='UNKNOWN')!, ACCESS = 'STREAM') 
 
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !3D arrays file
           WRITE(*,*) '************* OUTPUT ******************'
           WRITE(*,*) 'Writing 3D arrays:',NXX,NYY,NZZ
-          WRITE(11) (((MARCA(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+         !  WRITE(11) (((MARCA(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
           WRITE(11) (((-1. + U1CO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
           WRITE(11) (((DIVERCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
