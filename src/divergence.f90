@@ -1,8 +1,9 @@
 !***************************************************************************
-SUBROUTINE DIVER_UNIFORM(NX,NY,NZ,DX,DY,DZ,V2,V3,V4,DIVER)
+SUBROUTINE DIVER_UNIFORM(NX,NY,NZ,DX,DY,DZ,V2,V3,V4,DIVER,FLAG_PERIODIC)
 !***************************************************************************
 IMPLICIT NONE
 !in 
+INTEGER :: FLAG_PERIODIC
 INTEGER NX, NY, NZ
 REAL*4 DX, DY, DZ
 REAL*4 :: V2(NX,NY,NZ), V3(NX,NY,NZ), V4(NX,NY,NZ)
@@ -11,7 +12,6 @@ REAL*4, ALLOCATABLE :: DIFFX(:,:,:), DIFFY(:,:,:), DIFFZ(:,:,:)
 !out
 REAL*4 :: DIVER(NX,NY,NZ)
 
-
 DIVER(:,:,:) = 0.
 ALLOCATE(DIFFX(NX,NY,NZ), DIFFY(NX,NY,NZ), DIFFZ(NX,NY,NZ))
 DIFFX = 0.
@@ -19,28 +19,36 @@ DIFFY = 0.
 DIFFZ = 0.
 
 DIFFX(2:NX-1,:,:) = (V2(3:NX,:,:) - V2(1:NX-2,:,:))/2.
-!extrapolate to the borders
-DIFFX(1,:,:)  = 2.*(V2(2,:,:)-V2(1,:,:)) - DIFFX(2,:,:)
-DIFFX(NX,:,:) = 2.*(V2(NX,:,:)-V2(NX-1,:,:)) - DIFFX(NX-1,:,:)
-
 DIFFY(:,2:NY-1,:) = (V3(:,3:NY,:) - V3(:,1:NY-2,:))/2.
-!extrapolate to the borders
-DIFFY(:,1,:)  = 2.*(V3(:,2,:)-V3(:,1,:)) - DIFFY(:,1,:)
-DIFFY(:,NY,:) = 2.*(V3(:,NY,:)-V3(:,NY-1,:)) - DIFFY(:,NY-1,:)
-
 DIFFZ(:,:,2:NZ-1) = (V4(:,:,3:NZ) - V4(:,:,1:NZ-2))/2.
-!extrapolate to the borders
-DIFFZ(:,:,1)  = 2.*(V4(:,:,2)-V4(:,:,1)) - DIFFZ(:,:,2)
-DIFFZ(:,:,NZ) = 2.*(V4(:,:,NZ)-V4(:,:,NZ-1)) - DIFFZ(:,:,NZ-1)
+
+!BOUNDARY EXTRAPOLATION
+IF (FLAG_PERIODIC .EQ. 0) THEN
+   DIFFX(1,:,:)  = 2.*(V2(2,:,:)-V2(1,:,:)) - DIFFX(2,:,:)
+   DIFFX(NX,:,:) = 2.*(V2(NX,:,:)-V2(NX-1,:,:)) - DIFFX(NX-1,:,:)
+
+   DIFFY(:,1,:)  = 2.*(V3(:,2,:)-V3(:,1,:)) - DIFFY(:,2,:)
+   DIFFY(:,NY,:) = 2.*(V3(:,NY,:)-V3(:,NY-1,:)) - DIFFY(:,NY-1,:)
+
+   DIFFZ(:,:,1)  = 2.*(V4(:,:,2)-V4(:,:,1)) - DIFFZ(:,:,2)
+   DIFFZ(:,:,NZ) = 2.*(V4(:,:,NZ)-V4(:,:,NZ-1)) - DIFFZ(:,:,NZ-1)
+
+!PERIODIC BOUNDARY CONDITIONS
+ELSE IF (FLAG_PERIODIC .EQ. 1) THEN
+   DIFFX(1,:,:)  =  (V2(2,:,:) - V2(NX,:,:))/2.
+   DIFFX(NX,:,:) =  (V2(1,:,:) - V2(NX-1,:,:))/2.
+   DIFFY(:,1,:)  =  (V3(:,2,:) - V3(:,NY,:))/2.
+   DIFFY(:,NY,:) =  (V3(:,1,:) - V3(:,NY-1,:))/2.
+   DIFFZ(:,:,1)  =  (V4(:,:,2) - V4(:,:,NZ))/2.
+   DIFFZ(:,:,NZ) =  (V4(:,:,1) - V4(:,:,NZ-1))/2.
+ENDIF
 
 DIVER = DIFFX/DX + DIFFY/DY + DIFFZ/DZ
 
 DEALLOCATE(DIFFX, DIFFY, DIFFZ)
-
 !***************************************************************************
 END SUBROUTINE DIVER_UNIFORM
 !**************************************************************************
-
 
 
 !***************************************************************************

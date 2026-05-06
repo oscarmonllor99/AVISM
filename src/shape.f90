@@ -137,7 +137,7 @@ end subroutine JACOBI
 
 
 !***************************************************************************
-SUBROUTINE SHAPE(LOW1,LOW2,NVOID,INDICE,NCELLV,UVOID,GXC,GYC,GZC,EPS,IP)
+SUBROUTINE VOID_SHAPE(LOW1,LOW2,NVOID,INDICE,NCELLV,UVOID,GXC,GYC,GZC,EPS,IP)
 !***************************************************************************
 USE COMMONDATA
 IMPLICIT NONE
@@ -222,7 +222,7 @@ DO IV=1,NVOID
 
 ENDDO
 !***************************************************************************
-END SUBROUTINE SHAPE
+END SUBROUTINE VOID_SHAPE
 !***************************************************************************
 
 

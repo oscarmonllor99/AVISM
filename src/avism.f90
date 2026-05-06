@@ -29,6 +29,7 @@
        INTEGER :: ITER, CONTA
        INTEGER :: FILES_PER_SNAP, PARTTYPEX
        REAL*4 :: MASSDM
+       INTEGER :: FLAG_GADGET_READER
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
        ! COSMO
@@ -49,6 +50,13 @@
        REAL*4 :: RX1, RY1, RZ1
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
+       ! SURVEYS
+       INTEGER :: FLAG_MASK
+       INTEGER :: NMASK,J,K,I2,J2,K2,NDOWN
+       REAL*4 :: MASKLOW, MASKUPPER, MASKSIDE
+       INTEGER*1, ALLOCATABLE, DIMENSION(:,:,:) :: SMASK,SMASK2
+       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         
        ! VOIDS
        INTEGER :: NVOID, NVOIDP, NVOIDT, NVOID2
        INTEGER :: I, IV, IND, INDP
@@ -195,6 +203,10 @@
        READ(1,*) NHYX,NHYY,NHYZ
        READ(1,*) 
        READ(1,*) FILES_PER_SNAP,PARTTYPEX,MASSDM
+       READ(1,*)
+       READ(1,*) FLAG_GADGET_READER
+       READ(1,*)
+       READ(1,*) FLAG_MASK
        READ(1,*) !****************************************************
        READ(1,*) !*       Particle data handling parameters            *
        READ(1,*) !****************************************************
@@ -245,6 +257,18 @@
 #endif
 
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       ! Check periodic boundary conditions consistency with SURVEY/MASKING
+       IF (FLAG_MASK .EQ. 1) THEN
+         IF (FLAG_PERIOD .EQ. 1) THEN
+            WRITE(*,*) 'WARNING: PBCs considered in voids.dat but SURVEY/MASKED data provided!!!!!'
+            STOP
+         ENDIF
+       ENDIF
+       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
 
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        ! Allocate void finding variables
@@ -355,6 +379,28 @@
        WRITE(*,*) 'Threshold values    ', DENS_THRE, DENS_THRE2, GRAD_THRE
        WRITE(*,*) 'LEVMIN, LEVMAX, NL2:', LEVMIN, LEVMAX, NL2
        WRITE(*,*) 'Output directory:   ', TRIM(ADJUSTL(DIR))
+       WRITE(*,*)
+
+       !!!!!!!!!!!!!!!!!!!!!!!!!
+       !!!!!!!! CHECK MASK!!!!!!
+       !!!!!!!!!!!!!!!!!!!!!!!!!
+       IF (FLAG_MASK .EQ. 1) THEN
+         WRITE(*,*) '************   MASK  *********************'
+         OPEN(UNIT=16, FILE='input_data/mask.dat', access='stream')
+         READ(16) NMASK
+         WRITE(*,*) NMASK
+         IF (NMASK .NE. NCOX ) THEN
+            WRITE(*,*) 'MASK grid does not coincide with AVISM coarse grid', NMASK, NCOX
+            STOP
+         ENDIF
+         ALLOCATE(SMASK2(NMASK,NMASK,NMASK))
+         READ(16) MASKLOW, MASKUPPER, MASKSIDE
+         WRITE(*,*) MASKLOW, MASKUPPER, MASKSIDE
+         READ(16) SMASK2
+         CLOSE(16)
+         WRITE(*,*) 'FF of available volume', real(COUNT(SMASK2>0)) / real(NMASK**3)
+       ENDIF
+       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
 !***********************************************************************
@@ -396,7 +442,7 @@
 
 
 !***********************************************************************
-      
+
        NITER=INT((LAST-FIRST)/EVERY) + 1
 
        WRITE(*,*)
@@ -468,10 +514,19 @@
 
 #if use_hdf5 == 1
        ELSE IF (FLAG_DATA .EQ. 3) THEN
-         WRITE(*,*) 'AREPO data...'
+         WRITE(*,*) 'GADGET-like data...'
+
          call system_clock(t1,trate,tmax)
-         CALL READ_AREPO_HDF5(ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE)
+         IF(FLAG_GADGET_READER .EQ. 0) THEN
+            CALL READ_AREPO_HDF5(ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
+         ELSE IF(FLAG_GADGET_READER .EQ. 1) THEN
+            CALL READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
+         ELSE
+            WRITE(*,*) 'Provide a proper GADGET reader option: 0:Arepo, 1:Flamingo-DMO'
+            STOP 
+         ENDIF
          call system_clock(t2,trate,tmax)
+
          WRITE(*,*) 'Mass range:', MINVAL(MASAP(1:NPARTT)*UM), MAXVAL(MASAP(1:NPARTT)*UM)
 #endif
 
@@ -479,13 +534,18 @@
        
        !CHECK PARTICLES INSIDE BOUNDING BOX !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        IF (FLAG_DATA .EQ. 1 .OR. FLAG_DATA .EQ. 3) THEN
-      
+
+         WRITE(*,*) 'Particles range:'
+         WRITE(*,*) '   X:', minval(RXPA), maxval(RXPA)
+         WRITE(*,*) '   Y:', minval(RYPA), maxval(RYPA)
+         WRITE(*,*) '   Z:', minval(RZPA), maxval(RZPA)
+
          FLAG_STOP = 0
          
          !$OMP PARALLEL SHARED(NPARTT, RXPA, RYPA, RZPA, LADO0), &
          !$OMP PRIVATE(I)
          !$OMP DO REDUCTION(+:FLAG_STOP)
-         DO I=1,NPARTT
+         DO I =1,NPARTT
             IF ( (RXPA(I) .LT. -LADO0/2 .OR. RXPA(I) .GT. LADO0/2) .OR. &
                  (RYPA(I) .LT. -LADO0/2 .OR. RYPA(I) .GT. LADO0/2) .OR. &
                  (RZPA(I) .LT. -LADO0/2 .OR. RZPA(I) .GT. LADO0/2) ) THEN
@@ -496,7 +556,6 @@
          !$OMP END PARALLEL
 
          IF (FLAG_STOP .GE. 1) WRITE(*,*)
-         IF (FLAG_STOP .GE. 1) WRITE(*,*) MINVAL(RXPA), MAXVAL(RXPA), MINVAL(RYPA), MAXVAL(RYPA), MINVAL(RZPA), MAXVAL(RZPA)
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'Particles outside the bounding box! Check L0!'
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'Particles must be inside [-L0/2, L0/2] in each direction.'
          IF (FLAG_STOP .GE. 1) WRITE(*,*) 'STOPPING...'
@@ -505,8 +564,7 @@
 
        ENDIF
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
+       WRITE(*,*) 'ZETA ->', ZETA
        WRITE(*,*) '///////////// Time (sec) spent during reading:', float(t2-t1)/1.e3
        WRITE(*,*)
 
@@ -661,8 +719,7 @@
           END IF   
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-          WRITE(*,*)
-          WRITE(*,*)
+
           WRITE(*,*)
           WRITE(*,*)
           WRITE(*,*)
@@ -767,6 +824,43 @@
 
           ENDIF
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+          !!!!! GRID MASK !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+          ALLOCATE(SMASK(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
+          SMASK = 0
+
+          IF (FLAG_MASK .EQ. 1) THEN
+
+            !FROM SMASK2 (LOW RESOLUTION) TO VOID-FINDING RESOLUTION
+            IF(NXX > NMASK) THEN
+               NDOWN = INT(NXX/NMASK)
+               IF(MOD(NDOWN,2) .ne. 0) THEN
+                  WRITE(*,*) 'STH WRONG IN MASK INTERPOLATION', NDOWN, NXX, NDOWN
+                  STOP
+               ENDIF
+               DO K=1,NXX
+                  DO J=1,NYY
+                     DO I=1,NXX
+                        I2 = 1+INT((I-1)/NDOWN)
+                        J2 = 1+INT((J-1)/NDOWN)
+                        K2 = 1+INT((K-1)/NDOWN)
+                        SMASK(I,J,K) = SMASK2(I2,J2,K2)
+                     ENDDO
+                  ENDDO
+               ENDDO
+            ELSE
+               SMASK(1:NMASK,1:NMASK,1:NMASK) = SMASK2(1:NMASK,1:NMASK,1:NMASK)
+            END IF
+            WRITE(*,*) '  MASK FF %', &
+                           REAL(COUNT(SMASK>0)) / REAL(NXX**3) * 100
+            WRITE(*,*)
+
+          ELSE !DO NOT APPLY MASK
+            SMASK = 1
+          ENDIF
+          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
          !COMMON VARIABLES USED FOR VOID FINDING, UNIFORM GRID
           
@@ -882,7 +976,7 @@
                   CALL PPART_DENS(NPARTT,TREE,MASAP,PART_DENS)
 
                   CALL VVEL_INTERP_SPH_VW(NXX,NYY,NZZ,NPARTT,TREE, &
-                                 HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA, &
+                                 HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                                  U2DMCO,U3DMCO,U4DMCO)
 
                ENDIF
@@ -904,17 +998,17 @@
             IF (IR .LE. 0) THEN
                !dm+gas 
                IF(FLAG_DIV .EQ. 0) THEN 
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
                   DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIODIC)
                   DIVERGCO(1:NXX,1:NYY,1:NZZ) = UBAS
                !dm
                ELSE IF(FLAG_DIV .EQ. 1) THEN
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
                   DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
                !gas
                ELSE IF(FLAG_DIV .EQ. 2) THEN
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIODIC)
                   DIVERGCO(1:NXX,1:NYY,1:NZZ) = UBAS
                ENDIF
             ENDIF
@@ -947,7 +1041,7 @@
 
                !Particle divergence calculation performed in uniform grid
                IF (FLAG_DIV .EQ. 1 .OR. FLAG_DIV .EQ. 0) THEN
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS)
+                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
                   DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
                ENDIF
                
@@ -986,9 +1080,15 @@
 
                CALL PPART_DENS(NPARTT,TREE,MASAP,PART_DENS)
 
+               WRITE(*,*) MINVAL(PART_DENS), MAXVAL(PART_DENS)
+
                CALL VVEL_INTERP_SPH_VW(NXX,NYY,NZZ,NPARTT,TREE, &
-                              HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA, &
+                              HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                               U2DMCO,U3DMCO,U4DMCO)
+
+               WRITE(*,*) MINVAL(U2DMCO), MAXVAL(U2DMCO)
+               WRITE(*,*) MINVAL(U3DMCO), MAXVAL(U3DMCO)
+               WRITE(*,*) MINVAL(U4DMCO), MAXVAL(U4DMCO)
 
             ENDIF              
             call system_clock(t2,trate,tmax)
@@ -1016,7 +1116,7 @@
 
                IF(FLAG_VEL_INTERP .EQ. 0) THEN
                   WRITE(*,*) 'Calculating smoothing length...'
-                  CALL H_DISTANCE(NXX,NYY,NZZ,NPARTT,TREE,HPART)
+                  CALL H_DISTANCE(NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
                ENDIF
 
                CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
@@ -1037,7 +1137,7 @@
             ! Divergence calculation
             !---------------------------------------
 
-            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS)
+            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIODIC)
             DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
 
             !---------------------------------------
@@ -1072,7 +1172,7 @@
                !SINCE THIS TIME VVEL IS NOT CALLED PRIOR TO DDENS
                !WE NEED TO CALL H_DISTANCE TO COMPUTE HPART
                WRITE(*,*) 'Calculating smoothing length...'
-               CALL H_DISTANCE(NXX,NYY,NZZ,NPARTT,TREE,HPART)
+               CALL H_DISTANCE(NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
 
                WRITE(*,*) 'Applying density SPH KERNEL!'
 
@@ -1144,7 +1244,8 @@
             ! WRITE(*,*) MINVAL(U2GCO), MAXVAL(U2GCO)
             ! WRITE(*,*) MINVAL(U3GCO), MAXVAL(U3GCO)
             ! WRITE(*,*) MINVAL(U4GCO), MAXVAL(U4GCO)
-            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS)
+
+            CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2GCO,U3GCO,U4GCO,UBAS,FLAG_PERIODIC)
             DIVERGCO(1:NXX,1:NYY,1:NZZ) = UBAS
             
           ENDIF
@@ -1161,8 +1262,9 @@
          !* Until here, density is in rho_background units -> to units of mean density
           IF(FLAG_DATA .NE. 2) THEN
             U1CO = U1CO*ROTE
-            MEANDENS = SUM(U1CO(1:NXX,1:NYY,1:NZZ)) / REAL(NXX*NYY*NZZ)
-            U1CO = U1CO / MEANDENS 
+            MEANDENS = SUM(U1CO(1:NXX,1:NYY,1:NZZ)*SMASK(1:NXX,1:NYY,1:NZZ)) &
+                              / REAL(COUNT(SMASK>0))
+            U1CO = U1CO / MEANDENS !rho/rhomean
             MEANDENS = MEANDENS * (UM / UL**3)
             WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
                         MEANDENS / (RODO * (UM / UL**3))
@@ -1219,7 +1321,7 @@
           !--> FLAGV mark cells suitable for being void centres
           !--> FLAG_SUB tells which cells are allowed to grow a void 
           !             (all if l=levmin and only those with a void at lev-1 otherwise)
-          CALL MARK_ALL(LOW1,LOW2)
+          CALL MARK_ALL(LOW1,LOW2,SMASK)
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
           CONTA=0
@@ -1232,8 +1334,9 @@
           ENDDO
 
           WRITE(*,*)
-          WRITE(*,*) 'Volume fraction allowed to belong to a void: ', COUNT(FLAG_SUB .GT. 0)/(NPBC**3.)
-          WRITE(*,*) 'Potential void centres, fraction ', CONTA, CONTA/(NPBC**3.)
+          WRITE(*,*) 'Volume fraction allowed to belong to a void: ', REAL(COUNT(FLAG_SUB .GT. 0)) &
+                                                                     /REAL(COUNT(SMASK>0))
+          WRITE(*,*) 'Potential void centres, fraction ', CONTA, REAL(CONTA)/REAL(COUNT(SMASK>0))
           WRITE(*,*) 
           WRITE(*,*)
 
@@ -1247,7 +1350,7 @@
           WRITE(*,*) 'Finding voids...'
           call system_clock(t1,trate,tmax)
          
-          CALL VOIDFIND(IR,LOW1,LOW2,DXX,DYY,DZZ,RX1,RY1,RZ1, &
+          CALL VOIDFIND(IR,LOW1,LOW2,DXX,DYY,DZZ,RX1,RY1,RZ1,SMASK,&
                         NVOID_MAX,REQP,NVOID)
 
           call system_clock(t2,trate,tmax)
@@ -1325,7 +1428,8 @@
 
           WRITE(*,*) 'Num. Cells in voids', COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0)
           WRITE(*,*) 'Number of voids after merging:', NVOID2
-          WRITE(*,*) 'FF (Volume)', REAL(COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0))/(NXX*NYY*NZZ)
+          WRITE(*,*) 'FF (Volume)', REAL(COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0)) &
+                                     / REAL(COUNT(SMASK > 0))
           WRITE(*,*) '************************************************'
           WRITE(*,*)
 
@@ -1347,7 +1451,6 @@
                ENDDO
             ENDDO
           ENDDO
- 
 
           !min num. of cells for keeping voids; for few cell voids inertia tensor not reliable
           DO I=1,NVOID
@@ -1368,7 +1471,7 @@
 
           !Compute 3D Ellipsoid fitting with GEOMETRICAL CENTRE
           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-          CALL SHAPE(LOW1,LOW2,NVOID,INDICE,NCELLV,UVOID,GXC,GYC,GZC,EPS,IP)
+          CALL VOID_SHAPE(LOW1,LOW2,NVOID,INDICE,NCELLV,UVOID,GXC,GYC,GZC,EPS,IP)
           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
           !REDEFINE VOLNEW, WITH NCELLV
@@ -1380,7 +1483,7 @@
             VOLM=DBLE(NCELLV(IND))*DBLE(DXX*DYY*DZZ)
             VOLNEW(IND)=VOLM
           ENDDO  
-
+      
           !min radius
           DO I=1,NVOID
             IND = INDICE(I)
@@ -1407,15 +1510,14 @@
             XC(IND) = RADX(1)+(ICX(IND)-1)*DXX
             YC(IND) = RADY(1)+(ICY(IND)-1)*DYY
             ZC(IND) = RADZ(1)+(ICZ(IND)-1)*DZZ
-          ENDDO
-          
+          ENDDO     
 
           !Voids are simply connected. Holes have to be filled.
           WRITE(*,*) '************************************************'
           WRITE(*,*) 'Filling holes within voids (Simple Connection)...'
           call system_clock(t1,trate,tmax)
          !  CALL SIMPLE_CONNECTION(NVOID,INDICE,UVOID,MARCA,LOW1,LOW2)
-          CALL SIMPLE_CONNECTION_FAST(NVOID,MARCA,LOW1,LOW2)
+          CALL SIMPLE_CONNECTION_FAST(LOW1,LOW2,MARCA)
           call system_clock(t2,trate,tmax)
           WRITE(*,*) '///////////// Time (sec) spent during hole filling:', float(t2-t1)/1.e3
           WRITE(*,*) '************************************************'
@@ -1519,7 +1621,7 @@
           WRITE(*,*) '----------------------------------------------'
           WRITE(*,*) 'Number of voids (R>Rmin, Ncell>Nmin):', NVOIDT
          !  WRITE(*,*) 'Num. voids above R = 10 cMpc:', COUNT(((3.*VOLNEW)/(4.*PI))**(1./3.) .GT. 10.)
-          WRITE(*,*) 'FF (Volume)', VOLT_CLEAN/LADO0**3
+          WRITE(*,*) 'FF (Volume)', VOLT_CLEAN/(COUNT(SMASK > 0)*DXX**3)
           WRITE(*,*) '----------------------------------------------'
           WRITE(*,*) 'MIN(RAD), MAX(RAD) [cMpc]:', MINVAL(((3.*VOLNEW)/(4.*PI))**(1./3.), MASK=(UVOID == -1)), &
                                             MAXVAL(((3.*VOLNEW)/(4.*PI))**(1./3.), MASK=(UVOID == -1))
@@ -1564,17 +1666,18 @@
 !    OUTPUT
 !*-------------------------------------------------------------*
 
-          !Binary 3D maps
-          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED') 
+          !Binary 3D maps 
+          !(STREAM -> no headers or structure, open with Numpy)
+          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', status='UNKNOWN', ACCESS = 'STREAM') 
 
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !3D arrays file
           WRITE(*,*) '************* OUTPUT ******************'
           WRITE(*,*) 'Writing 3D arrays:',NXX,NYY,NZZ
-          WRITE(11) (((MARCA(IX,JY,KZ), IX=1,NXX), JY=1,NYY), KZ=1,NZZ)
-          WRITE(11) (((-1. + U1CO(IX,JY,KZ), IX=1,NXX), JY=1,NYY), KZ=1,NZZ)
-          WRITE(11) (((DIVERCO(IX,JY,KZ), IX=1,NXX), JY=1,NYY), KZ=1,NZZ)
+          WRITE(11) (((MARCA(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+          WRITE(11) (((-1. + U1CO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+          WRITE(11) (((DIVERCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -1700,6 +1803,7 @@
       ENDIF
       !~~~~~~~~~~~~~~~~~~~~~~~
 
+       DEALLOCATE(SMASK)
        DEALLOCATE(UBAS)
        DEALLOCATE(U1CO, U1DMCO, U1GCO, U1SCO)
        DEALLOCATE(U2DMCO,U3DMCO,U4DMCO,U2GCO,U3GCO,U4GCO)
@@ -1782,6 +1886,7 @@
       DEALLOCATE(VOL,FATHER)
       DEALLOCATE(RINIXCO,RINIYCO,RINIZCO)
       DEALLOCATE(RFINXCO,RFINYCO,RFINZCO)
+      IF (ALLOCATED(SMASK2)) DEALLOCATE(SMASK2)
 
       WRITE(*,*)
       WRITE(*,*) 

@@ -278,9 +278,9 @@ SUBROUTINE READ_MASCLET(ITER, NDXYZ0, NL, T, ZETA) !output
         !!!!!!!!
         READ(31) 
         !IF MAGNETIC FIELD CONSIDERED
-        !READ(31)
-        !READ(31)
-        !READ(31)
+       !  READ(31)
+       !  READ(31)
+       !  READ(31)
       
        !gas is read only to the LEVMAX level
        DO IR=1,NL2
@@ -308,9 +308,9 @@ SUBROUTINE READ_MASCLET(ITER, NDXYZ0, NL, T, ZETA) !output
         READ(31) 
         READ(31) 
         !IF MAGNETIC FIELD CONSIDERED
-        !READ(31)
-        !READ(31)
-        !READ(31)
+       !  READ(31)
+       !  READ(31)
+       !  READ(31)
        END DO
        END DO
 

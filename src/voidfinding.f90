@@ -10,12 +10,13 @@ MODULE VOIDFINDING
 CONTAINS 
 
 !********************************************************************************
-SUBROUTINE MARK_ALL(LOW1,LOW2) !valid for all hierarchies
+SUBROUTINE MARK_ALL(LOW1,LOW2,SMASK) !valid for all hierarchies
 !********************************************************************************
      USE COMMONDATA, ONLY: MARCAP2, FLAGV, FLAG_SUB, DENS_THRE, U1CO, DIVERCO
      IMPLICIT NONE
      INTEGER LOW1,LOW2
      INTEGER IX, JY, KZ, F1, F2
+     INTEGER*1 :: SMASK(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2)
 
      !MARKS CELL AS CANDIDATE FOR CENTRE
      ALLOCATE(FLAGV(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
@@ -29,6 +30,7 @@ SUBROUTINE MARK_ALL(LOW1,LOW2) !valid for all hierarchies
      DO KZ=LOW1, LOW2
         DO JY=LOW1, LOW2
            DO IX=LOW1, LOW2
+              IF(SMASK(IX,JY,KZ) .EQ. 0) CYCLE
               IF(MARCAP2(IX,JY,KZ) .NE. 0 ) THEN 
 
                    FLAG_SUB(IX,JY,KZ) = 1 !can be part of a subvoid
@@ -55,7 +57,7 @@ END SUBROUTINE MARK_ALL
 
 !********************************************************************************
 SUBROUTINE VOIDFIND(LEV,LOW1,LOW2,DDX,DDY,DDZ, &
-                    RX1,RY1,RZ1,NVOID1,REQP,NVOID)
+                    RX1,RY1,RZ1,SMASK,NVOID1,REQP,NVOID)
 !Serial routine 
 !********************************************************************************
 USE COMMONDATA
@@ -65,6 +67,7 @@ INTEGER:: LEV, NVOID1
 REAL*4:: DDX, DDY, DDZ, RX1, RY1, RZ1
 INTEGER, ALLOCATABLE :: MARCA_AUX(:,:,:)
 REAL*4, DIMENSION(NVOID1):: REQP
+INTEGER*1 :: SMASK(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2)
 !local variables
 INTEGER:: NXYZ, II, I1, I, J, K
 INTEGER:: L1, IX, JY, KZ, IXX, JYY, KZZ
@@ -78,9 +81,9 @@ INTEGER, ALLOCATABLE:: DDDX(:), DDDY(:), DDDZ(:), &
     DDDX2(:), DDDY2(:), DDDZ2(:), INDICE(:), INDICE2(:)
 INTEGER:: FLAG_DIV_P, FLAG_NEXT_GRAD_P, NVOID_MAX_P, NSEC_P
 INTEGER:: INDV
-INTEGER :: FLAG,FLAG1,FLAG2,FLAGX1,FLAGX2,FLAGY1,FLAGY2,FLAGZ1,FLAGZ2
-INTEGER, ALLOCATABLE :: FLAG1_GRID(:,:,:),FLAGX1_GRID(:,:,:),FLAGX2_GRID(:,:,:)
-INTEGER, ALLOCATABLE :: FLAGY1_GRID(:,:,:),FLAGY2_GRID(:,:,:),FLAGZ1_GRID(:,:,:),FLAGZ2_GRID(:,:,:)
+INTEGER*1 :: FLAG,FLAG1,FLAG2,FLAGX1,FLAGX2,FLAGY1,FLAGY2,FLAGZ1,FLAGZ2
+INTEGER*1, ALLOCATABLE :: FLAG1_GRID(:,:,:),FLAGX1_GRID(:,:,:),FLAGX2_GRID(:,:,:)
+INTEGER*1, ALLOCATABLE :: FLAGY1_GRID(:,:,:),FLAGY2_GRID(:,:,:),FLAGZ1_GRID(:,:,:),FLAGZ2_GRID(:,:,:)
 
 !parameters
 INTEGER NSEC
@@ -251,7 +254,7 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
 
 
 !$OMP PARALLEL SHARED(LOW1,LOW2,DIVERCO,U1CO,FLAG_DIV_P,FLAG_NEXT_GRAD_P,DIV_THRE,&
-!$OMP FLAGX1_GRID,FLAGX2_GRID,FLAGY1_GRID,FLAGY2_GRID,FLAGZ1_GRID,FLAGZ2_GRID, &
+!$OMP FLAGX1_GRID,FLAGX2_GRID,FLAGY1_GRID,FLAGY2_GRID,FLAGZ1_GRID,FLAGZ2_GRID,SMASK, &
 !$OMP FLAG1_GRID,MARCAP2,REQP,RMIN_SUB,FLAG_SUB,DDX,DDY,DDZ,GRAD_THRE,DENS_THRE2,NSEC_P), &
 !$OMP     PRIVATE(II,IX,JY,KZ,REQ0,INDV,DDENS,DDENS2), DEFAULT(NONE)
 !$OMP DO REDUCTION(+:FLAGX1_GRID,FLAGX2_GRID,FLAGY1_GRID,FLAGY2_GRID, &
@@ -277,6 +280,7 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(IX .GE. LOW2-NSEC_P) FLAGX2_GRID(IX,JY,KZ)=1
             IF(FLAGX2_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = IX+1
+               IF(SMASK(II,JY,KZ).EQ.0) CYCLE
                !+X GRADIENT
                IF(II .EQ. LOW2) THEN
                   !only check divergence and density
@@ -301,6 +305,7 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(IX .LE. LOW1+NSEC_P) FLAGX1_GRID(IX,JY,KZ)=1
             IF(FLAGX1_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = IX-1
+               IF(SMASK(II,JY,KZ).EQ.0) CYCLE
                !+X GRADIENT
                IF(II .EQ. LOW1) THEN
                   !only check divergence and density
@@ -325,6 +330,7 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(JY .GE. LOW2-NSEC_P) FLAGY2_GRID(IX,JY,KZ)=1
             IF(FLAGY2_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = JY+1
+               IF(SMASK(IX,II,KZ).EQ.0) CYCLE
                !+Y GRADIENT
                IF(II .EQ. LOW2) THEN
                   !only check divergence and density
@@ -349,6 +355,7 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(JY .LE. LOW1+NSEC_P) FLAGY1_GRID(IX,JY,KZ)=1
             IF(FLAGY1_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = JY-1
+               IF(SMASK(IX,II,KZ).EQ.0) CYCLE
                !+Y GRADIENT
                IF(II .EQ. LOW1) THEN
                   !only check divergence and density
@@ -373,6 +380,7 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(KZ .GE. LOW2-NSEC_P) FLAGZ2_GRID(IX,JY,KZ)=1
             IF(FLAGZ2_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = KZ+1
+               IF(SMASK(IX,JY,II).EQ.0) CYCLE
                !+Z GRADIENT
                IF(II .EQ. LOW2) THEN
                   !only check divergence and density
@@ -397,6 +405,7 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(KZ .LE. LOW1+NSEC_P) FLAGZ1_GRID(IX,JY,KZ)=1
             IF(FLAGZ1_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = KZ-1
+               IF(SMASK(IX,JY,II).EQ.0) CYCLE
                !+Z GRADIENT
                IF(II .EQ. LOW1) THEN
                   !only check divergence and density
@@ -993,7 +1002,7 @@ END SUBROUTINE MERGE_VOID
 
 
 !***************************************************************************
-SUBROUTINE SIMPLE_CONNECTION_FAST(NVOID,MARCA,LOW1,LOW2)
+SUBROUTINE SIMPLE_CONNECTION_FAST(LOW1,LOW2,MARCA)
 !Breadth-First Search [O(Ncell)] algorithm to find the connected area outside
 !a void. Everything that is not connected to this area and does
 !not belong to the void, is a hole that must be filled.
@@ -1001,8 +1010,7 @@ SUBROUTINE SIMPLE_CONNECTION_FAST(NVOID,MARCA,LOW1,LOW2)
 
    IMPLICIT NONE
    !input variables
-   INTEGER :: NVOID, LOW1, LOW2
-   INTEGER, DIMENSION(NVOID) :: INDICE, UVOID
+   INTEGER :: LOW1, LOW2
    !local
    INTEGER IX,JY,KZ,IND,I,II
    INTEGER :: COUNTER

@@ -121,7 +121,8 @@ CONTAINS
 
 
 !********************************************************************************
-   SUBROUTINE VEL_INTERP_TSC(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA,U2PA,U3PA,U4PA,U2,U3,U4)
+   SUBROUTINE VEL_INTERP_TSC(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA, &
+                     U2PA,U3PA,U4PA,U2,U3,U4)
 !********************************************************************************
       USE COMMONDATA, ONLY: DX,DY,DZ,RADX,RADY,RADZ,PARTIRED
 
@@ -265,7 +266,7 @@ CONTAINS
 
 
 !********************************************************************************  
-   SUBROUTINE H_DISTANCE(NX,NY,NZ,NPARTT,TREE,HPART)
+   SUBROUTINE H_DISTANCE(NX,NY,NZ,NPARTT,TREE,SMASK,HPART)
    !this subroutine calculates the kernel distance h(x) for every cell x
    !required by DDENS_INTERP_SPH if VVEL_INTERP_SPH is not used
 !********************************************************************************  
@@ -276,6 +277,7 @@ CONTAINS
          !input variables
          INTEGER NX,NY,NZ
          INTEGER(KIND=8) :: NPARTT, CONTA, I
+         INTEGER*1 :: SMASK(:,:,:)
          !LOCAL
          INTEGER :: IX,JY,KZ
 
@@ -290,7 +292,7 @@ CONTAINS
          !SPH related
          REAL*4 :: HPART(NPARTT)
 
-         !$OMP PARALLEL DO SHARED(KNEIGHBOURS,NX,NY,NZ, &
+         !$OMP PARALLEL DO SHARED(KNEIGHBOURS,NX,NY,NZ,SMASK, &
          !$OMP                   TREE,DX,DY,DZ,RADX,RADY,RADZ) &
          !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,NEIGH, & 
          !$OMP               CONTA), REDUCTION(MAX:HPART) &
@@ -299,6 +301,7 @@ CONTAINS
             DO JY=1,NY
                DO IX=1,NX
 
+                  IF (SMASK(IX,JY,KZ) .EQ. 0) CYCLE
                   TAR(1) = RADX(IX)
                   TAR(2) = RADY(JY)
                   TAR(3) = RADZ(KZ)
@@ -343,7 +346,8 @@ CONTAINS
 
 
 !********************************************************************************
-   SUBROUTINE DDENS_INTERP_SPH(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA,HPART,MASAP,U)
+   SUBROUTINE DDENS_INTERP_SPH(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA, &
+                  HPART,MASAP,U)
 !using HPART, smoothing lenght given
 !by the furthest cell to which the particle contributes in the
 !velocity interpolation
@@ -371,8 +375,8 @@ CONTAINS
          !SPH related
          REAL*4 :: HPART(NPARTT)
 
-         !REAL*8 precision auxiliary U
-         REAL*8, ALLOCATABLE :: U8(:,:,:)
+         ! !REAL*8 precision auxiliary U
+         ! REAL*8, ALLOCATABLE :: U8(:,:,:)
 
          !output
          REAL*4 U(NX,NY,NZ)
@@ -395,14 +399,13 @@ CONTAINS
          END DO
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-         !Alloc U8
-         ALLOCATE(U8(NX,NY,NZ))
+         ! !Alloc U8
+         ! ALLOCATE(U8(NX,NY,NZ))
 
          !$OMP PARALLEL DO SHARED(NPARTT,XGRIDPOS,YGRIDPOS,ZGRIDPOS,HPART, &
          !$OMP                   RXPA,RYPA,RZPA,MASAP,RADX,RADY,RADZ, &
-         !$OMP                   DX,DY,DZ,NX,NY,NZ), &
+         !$OMP                   DX,DY,DZ,NX,NY,NZ,U), &
          !$OMP PRIVATE(I,IX,JY,KZ,IX2,JY2,KZ2,H,INCREX,INCREY,INCREZ,DDIST,NORM), &
-         !$OMP REDUCTION(+:U8), &
          !$OMP SCHEDULE(DYNAMIC), DEFAULT(NONE)
          DO I=1,NPARTT
             IX = XGRIDPOS(I)
@@ -436,7 +439,8 @@ CONTAINS
 
             ! Particle only contributes to its own cell
             IF (NORM .EQ. 0.) THEN
-               U8(IX,JY,KZ) = U8(IX,JY,KZ) + REAL(MASAP(I), KIND=8)
+               !$OMP ATOMIC
+               U(IX,JY,KZ) =  U(IX,JY,KZ) + MASAP(I)
                CYCLE
             ENDIF
 
@@ -456,7 +460,8 @@ CONTAINS
                         CALL KERNEL_FUNC_2(H,DDIST)
                         
                         !Update
-                        U8(IX2,JY2,KZ2) = U8(IX2,JY2,KZ2) + REAL(DDIST*MASAP(I)/NORM, KIND=8)
+                        !$OMP ATOMIC
+                        U(IX2,JY2,KZ2) = U(IX2,JY2,KZ2) + DDIST*MASAP(I)/NORM
                   ENDDO
                ENDDO
             ENDDO
@@ -464,9 +469,9 @@ CONTAINS
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-         !CONVERT REAL*8 TO REAL*4 AFTER INTERPOLATION
-         U = REAL(U8, KIND=4)
-         DEALLOCATE(U8)
+         ! !CONVERT REAL*8 TO REAL*4 AFTER INTERPOLATION
+         ! U = REAL(U8, KIND=4)
+         ! DEALLOCATE(U8)
 
          !FOR THE MOMENT U IS MASS
 
@@ -477,7 +482,7 @@ CONTAINS
 
 !********************************************************************************
    SUBROUTINE VVEL_INTERP_SPH(NX,NY,NZ,NPARTT,TREE, &
-                        HPART,MASAP,U2PA,U3PA,U4PA,U2,U3,U4)
+                        HPART,MASAP,U2PA,U3PA,U4PA,SMASK,U2,U3,U4)
 !********************************************************************************
          USE COSMOKDTREE 
          USE COMMONDATA, ONLY: KNEIGHBOURS,DX,DY,DZ,RADX,RADY,RADZ,PARTIRED
@@ -488,6 +493,7 @@ CONTAINS
          INTEGER(KIND=8) :: NPARTT, CONTA, I
          REAL*4 U2PA(PARTIRED),U3PA(PARTIRED),U4PA(PARTIRED)
          REAL*4 MASAP(PARTIRED)
+         INTEGER*1 :: SMASK(:,:,:)
          !LOCAL
          INTEGER :: IX,JY,KZ
          REAL*8 BAS8,BAS8X,BAS8Y,BAS8Z
@@ -495,6 +501,7 @@ CONTAINS
          !h smoothing length for each particle
          REAL*4 HKERN
          REAL,ALLOCATABLE::DIST(:)
+         REAL*8,ALLOCATABLE::DIST8(:)
          INTEGER(KIND=8),ALLOCATABLE::NEIGH(:)
          
          !query
@@ -508,13 +515,16 @@ CONTAINS
          REAL*4 U2(NX,NY,NZ), U3(NX,NY,NZ), U4(NX,NY,NZ)
 
          !$OMP PARALLEL DO SHARED(KNEIGHBOURS,NX,NY,NZ,MASAP,U2PA,U3PA,U4PA,U2,U3,U4, &
-         !$OMP                   TREE,DX,DY,DZ,RADX,RADY,RADZ) &
-         !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,NEIGH, & 
+         !$OMP                   TREE,DX,DY,DZ,RADX,RADY,RADZ,SMASK) &
+         !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,DIST8,NEIGH, & 
          !$OMP               HKERN,BAS8,BAS8X,BAS8Y,BAS8Z,CONTA), REDUCTION(MAX:HPART) &
          !$OMP SCHEDULE(DYNAMIC), DEFAULT(NONE)
          DO KZ=1,NZ
             DO JY=1,NY
                DO IX=1,NX
+
+                  !avoid out-of-mask cells
+                  IF (SMASK(IX,JY,KZ) .EQ. 0) CYCLE
 
                   TAR(1) = RADX(IX)
                   TAR(2) = RADY(JY)
@@ -557,23 +567,27 @@ CONTAINS
                      DIST(I)=DIST(I)*MASAP(NEIGH(I))
                   END DO
 
+                  ALLOCATE(DIST8(CONTA))
+                  DIST8 = REAL(DIST, KIND=8)
+
                   !averaging
                   BAS8=0.D0
                   BAS8X=0.D0
                   BAS8Y=0.D0
                   BAS8Z=0.D0
                   DO I=1,CONTA 
-                     BAS8=BAS8+DIST(I)
-                     BAS8X=BAS8X+DIST(I)*U2PA(NEIGH(I))
-                     BAS8Y=BAS8Y+DIST(I)*U3PA(NEIGH(I))
-                     BAS8Z=BAS8Z+DIST(I)*U4PA(NEIGH(I))
+                     BAS8=BAS8+DIST8(I)
+                     BAS8X=BAS8X+DIST8(I)*U2PA(NEIGH(I))
+                     BAS8Y=BAS8Y+DIST8(I)*U3PA(NEIGH(I))
+                     BAS8Z=BAS8Z+DIST8(I)*U4PA(NEIGH(I))
                   END DO
-
                   U2(IX,JY,KZ)=BAS8X/BAS8
                   U3(IX,JY,KZ)=BAS8Y/BAS8
                   U4(IX,JY,KZ)=BAS8Z/BAS8
                   
                   DEALLOCATE(DIST,NEIGH)
+                  DEALLOCATE(DIST8)
+
                ENDDO
             ENDDO
          ENDDO
@@ -642,7 +656,6 @@ CONTAINS
          ENDDO
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-
 !************************************************************************
    END SUBROUTINE PPART_DENS
 !************************************************************************
@@ -650,7 +663,7 @@ CONTAINS
 
 !********************************************************************************
    SUBROUTINE VVEL_INTERP_SPH_VW(NX,NY,NZ,NPARTT,TREE, &
-                        HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,U2,U3,U4)
+                        HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,U2,U3,U4)
 !
 ! SAME AS VVEL_INTERP_SPH BUT USING VOLUME WEIGHTING instead of MASS
 !********************************************************************************
@@ -664,6 +677,7 @@ CONTAINS
          INTEGER(KIND=8) :: NPARTT, CONTA, I, J
          REAL*4 U2PA(PARTIRED),U3PA(PARTIRED),U4PA(PARTIRED)
          REAL*4 MASAP(PARTIRED)
+         INTEGER*1 :: SMASK(:,:,:)
          !LOCAL
          INTEGER :: IX,JY,KZ
          REAL*8 BAS8,BAS88,BAS8X,BAS8Y,BAS8Z
@@ -687,13 +701,16 @@ CONTAINS
          REAL*4 U2(NX,NY,NZ), U3(NX,NY,NZ), U4(NX,NY,NZ)
 
          !$OMP PARALLEL DO SHARED(KNEIGHBOURS,NX,NY,NZ,MASAP,U2PA,U3PA,U4PA,U2,U3,U4, &
-         !$OMP                   TREE,DX,DY,DZ,RADX,RADY,RADZ,PART_DENS) &
+         !$OMP                   TREE,DX,DY,DZ,RADX,RADY,RADZ,PART_DENS,SMASK) &
          !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,DIST8,NEIGH, & 
          !$OMP               HKERN,BAS8,BAS8X,BAS8Y,BAS8Z,CONTA), REDUCTION(MAX:HPART) &
          !$OMP SCHEDULE(DYNAMIC), DEFAULT(NONE)
          DO KZ=1,NZ
             DO JY=1,NY
                DO IX=1,NX
+
+                  !avoid out-of-mask cells
+                  IF (SMASK(IX,JY,KZ) .EQ. 0) CYCLE
 
                   TAR(1) = RADX(IX)
                   TAR(2) = RADY(JY)
