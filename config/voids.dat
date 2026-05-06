@@ -5,22 +5,22 @@
 files: first, last, every ---------------------------------------------------->
 1,1,1
 cells for the coarser grid --------------------------------------------------->
-256,256,256
+650,650,650
 min and max levels of the hierarchies to be used by voidfind   --------------->
 0,0
 Hubble constant (h), omega matter -------------------------------------------->
 0.678,0.31
-comoving box size ------------------------------------------------------------>
-302.63
+box size --------------------------------------------------------------------->
+1292.484
 periodic boundary conditions -> 0: no, 1: yes -------------------------------->
-1
+0
 *******************************************************************************
 *       Void finder input parameters                                      
 *******************************************************************************
 maximum number of voids for dimensioning ------------------------------------->
 30000000
 density contrast threshold for centers --------------------------------------->
--0.8
+-0.6
 density contrast threshold for the edges ------------------------------------->
 10.
 density gradient threshold --------------------------------------------------->
@@ -28,23 +28,27 @@ density gradient threshold --------------------------------------------------->
 velocity divergence threshold ------------------------------------------------>
 0.
 min void radius (in Mpc) ----------------------------------------------------->
-3.
+1.
 min void radius to look for subvoids (in Mpc) -------------------------------->
-3.
+1.
 *******************************************************************************
 *       Type of data to process                                   
 *******************************************************************************
-type of data -> 0:MASCLET, 1:BinPart, 2:BinGrid, 3:AREPO(snap) --------------->
+type of data -> 0:MASCLET, 1:BinPart, 2:BinGrid, 3:GADGET-like --------------->
 1
-IF MASCLET or Grid data: NX, NY, NZ (INPUT grid size) ------------------------>
+IF MASCLET or Grid data: NX, NY, NZ (INPUT coarse grid size) ----------------->
 128,128,128
-IF AREPO data: files per snapshot, PartType (1:gas, 2:dm), DM mass (Msun) ---->
-100, 2, 470000000.0
+IF GADGET-like: files per snapshot, PartType (1:gas, 2:dm), DM mass (Msun) --->
+16,2,4.52E10
+GADGET-like reader: 0:IllustrisTNG, 1:FLAMINGO-DMO --------------------------->
+1
+IF SURVEY: input mask (0:yes, 1:no) ------------------------------------------>
+1
 *******************************************************************************
 *       Particle data handling parameters                                   
 *******************************************************************************
 maximum number of particles to read (DIMENSIONING) --------------------------->
-2000000000
+50000000
 particle velocity is available -> 0: no, 1: yes ------------------------------>
 1
 interpolation scheme for particle velocity field (0:TSC, 1:SPH) -------------->
@@ -52,18 +56,18 @@ interpolation scheme for particle velocity field (0:TSC, 1:SPH) -------------->
 interpolation scheme for particle density field (0:TSC, 1:SPH) --------------->
 1
 Number of nearest neighbours to use to transform into grid ------------------->
-32
+16
 *******************************************************************************
 *       Output management parameters
 *******************************************************************************
 whether to write cubes that are merged to form voids -> 0: no, 1: yes --->
-1
+0
 *******************************************************************************
 *       MASCLET ONLY (skip if another type of input is used)                               
 *******************************************************************************
 NPALEV, NLEVELS, NAMRX, NAMRY, NAMRZ ----------------------------------------->
-45000,10,64,64,64
+100000,10,64,64,64
 which velocity for divergence -> 0: all, 1: DM, 2: gas ----------------------->
-0
+1
 which density field to use -> 0: all, 1: DM, 2: gas -------------------------->
-0
+1
