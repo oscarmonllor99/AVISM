@@ -9,6 +9,7 @@ SUBROUTINE READ_AREPO_HDF5(ITER, FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
       implicit none 
 
       integer iter, files_per_snap, i
+      integer*8 :: I8
       CHARACTER*3 ITER_STRING
       CHARACTER*200 IFILE_STRING
       INTEGER IFILE
@@ -16,6 +17,7 @@ SUBROUTINE READ_AREPO_HDF5(ITER, FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
       INTEGER PARTTYPEX !parttype to read, 0 for gas, 1 for DM
       REAL*4 ACHE,MASSDM !mass of DM particles in Msun
       REAL*4 :: ZETA
+      REAL*8 :: ZETA8
 
       integer(hid_t) :: file_id, group_id, attr_id, mem_space_id, file_space_id
       INTEGER(HID_T) :: memtype_id
@@ -36,15 +38,15 @@ SUBROUTINE READ_AREPO_HDF5(ITER, FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
       !INITIALIZE PARTICLE ARRAYS
       !$OMP PARALLEL DO SHARED(PARTIRED,U2PA,U3PA,U4PA,RXPA,RYPA,RZPA, &
       !$OMP            MASAP), &
-      !$OMP            PRIVATE(I)
-      DO I=1,PARTIRED
-       U2PA(I)=0.0 
-       U3PA(I)=0.0
-       U4PA(I)=0.0
-       RXPA(I)=0.0  !DM vars
-       RYPA(I)=0.0
-       RZPA(I)=0.0
-       MASAP(I)=0.0
+      !$OMP            PRIVATE(I8)
+      DO I8=1,PARTIRED
+       U2PA(I8)=0.0 
+       U3PA(I8)=0.0
+       U4PA(I8)=0.0
+       RXPA(I8)=0.0  !DM vars
+       RYPA(I8)=0.0
+       RZPA(I8)=0.0
+       MASAP(I8)=0.0
       END DO
 
       WRITE(*,*) 'Files per snapshot: ', FILES_PER_SNAP
@@ -100,11 +102,12 @@ SUBROUTINE READ_AREPO_HDF5(ITER, FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
        CALL h5aopen_f(group_id, "Redshift", attr_id, status)
        CALL h5aget_type_f(attr_id, memtype_id, status)
        dims1d(1) = 1
-       CALL h5aread_f(attr_id, memtype_id, ZETA, dims1d, status)
-
+       CALL h5aread_f(attr_id, memtype_id, ZETA8, dims1d, status)
+       ZETA = ZETA8
        CALL h5aclose_f(attr_id, status)
 
        CALL h5gclose_f(group_id, status)
+       
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
        dims1d(1) = NumPart_ThisFile(PARTTYPEX)
@@ -296,6 +299,7 @@ SUBROUTINE READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
       implicit none 
 
       integer iter, files_per_snap, i
+      integer*8 :: I8
       CHARACTER*4 ITER_STRING
       CHARACTER*200 IFILE_STRING
       INTEGER IFILE
@@ -324,15 +328,15 @@ SUBROUTINE READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
       !INITIALIZE PARTICLE ARRAYS
       !$OMP PARALLEL DO SHARED(PARTIRED,U2PA,U3PA,U4PA,RXPA,RYPA,RZPA, &
       !$OMP            MASAP), &
-      !$OMP            PRIVATE(I)
-      DO I=1,PARTIRED
-       U2PA(I)=0.0 
-       U3PA(I)=0.0
-       U4PA(I)=0.0
-       RXPA(I)=0.0  !DM vars
-       RYPA(I)=0.0
-       RZPA(I)=0.0
-       MASAP(I)=0.0
+      !$OMP            PRIVATE(I8)
+      DO I8=1,PARTIRED
+       U2PA(I8)=0.0 
+       U3PA(I8)=0.0
+       U4PA(I8)=0.0
+       RXPA(I8)=0.0  !DM vars
+       RYPA(I8)=0.0
+       RZPA(I8)=0.0
+       MASAP(I8)=0.0
       END DO
 
       WRITE(*,*) 'Files per snapshot: ', FILES_PER_SNAP

@@ -17,14 +17,15 @@ CONTAINS
       !input variables
       INTEGER NX,NY,NZ
       INTEGER(KIND=8) :: NPARTT, LOW1, IP
-      REAL*4 RXPA(PARTIRED),RYPA(PARTIRED),RZPA(PARTIRED),MASAP(PARTIRED)
+      REAL*4, INTENT(IN) :: RXPA(PARTIRED),RYPA(PARTIRED),RZPA(PARTIRED),MASAP(PARTIRED)
 
       !local variables
       INTEGER I, J, K
       INTEGER IX, JY, KZ, I3, J3, K3
       REAL*4 RADX1, RADXNX, RADY1, RADYNY, RADZ1, RADZNZ, LENG
       REAL*4 VX(-1:1), VY(-1:1), VZ(-1:1)
-      REAL*4 BAS
+      REAL*4 BAS, XTMP, YTMP, ZTMP
+      REAL*4 INC_VAL
 
       !output
       REAL*4 U(NX,NY,NZ)
@@ -38,82 +39,74 @@ CONTAINS
       RADZNZ=RADZ(NZ)+0.5*DZ
       LENG=RADXNX-RADX1
 
-      DO I=-1,1
-         VX(I)=0.0
-         VY(I)=0.0
-         VZ(I)=0.0
-      END DO
-
       LOW1=NPARTT
 
    !$OMP PARALLEL DO SHARED(LOW1,RXPA,RYPA,RZPA,RADX1,RADY1,RADZ1, &
    !$OMP     RADXNX,RADYNY,RADZNZ,LENG,DX,DY,DZ,NX,NY,NZ,MASAP,U, &
    !$OMP     RADX,RADY,RADZ), &
-   !$OMP PRIVATE(IP,BAS,I,J,K,VX,VY,VZ,IX,JY,KZ,I3,J3,K3), &
+   !$OMP PRIVATE(IP,BAS,I,J,K,VX,VY,VZ,IX,JY,KZ,I3,J3,K3,XTMP,YTMP,ZTMP,INC_VAL), &
    !$OMP DEFAULT(NONE)
       DO IP=1, LOW1
+         ! Use local variables to avoid modifying intent(in) arrays
+         XTMP = RXPA(IP)
+         YTMP = RYPA(IP)
+         ZTMP = RZPA(IP)
 
-         !move by LENG particles outside the grid
-         IF(RXPA(IP).LT.RADX1) RXPA(IP)=RXPA(IP)+LENG
-         IF(RXPA(IP).GE.RADXNX) RXPA(IP)=RXPA(IP)-LENG
-         IF(RYPA(IP).LT.RADY1) RYPA(IP)=RYPA(IP)+LENG
-         IF(RYPA(IP).GE.RADYNY) RYPA(IP)=RYPA(IP)-LENG
-         IF(RZPA(IP).LT.RADZ1) RZPA(IP)=RZPA(IP)+LENG
-         IF(RZPA(IP).GE.RADZNZ) RZPA(IP)=RZPA(IP)-LENG
+         !move by LENG particles outside the grid locally
+         IF(XTMP.LT.RADX1) XTMP=XTMP+LENG
+         IF(XTMP.GE.RADXNX) XTMP=XTMP-LENG
+         IF(YTMP.LT.RADY1) YTMP=YTMP+LENG
+         IF(YTMP.GE.RADYNY) YTMP=YTMP-LENG
+         IF(ZTMP.LT.RADZ1) ZTMP=ZTMP+LENG
+         IF(ZTMP.GE.RADZNZ) ZTMP=ZTMP-LENG
 
-         !initial position
          !I,J,K: cell of the particle in the grid
-         BAS=RXPA(IP)
-         I=INT(((BAS-RADX(1))/DX)+0.49999) + 1
-         BAS=RYPA(IP)
-         J=INT(((BAS-RADY(1))/DY)+0.49999) + 1
-         BAS=RZPA(IP)
-         K=INT(((BAS-RADZ(1))/DZ)+0.49999) + 1
+         I=INT(((XTMP-RADX(1))/DX)+0.49999) + 1
+         J=INT(((YTMP-RADY(1))/DY)+0.49999) + 1
+         K=INT(((ZTMP-RADZ(1))/DZ)+0.49999) + 1
 
-   !***  TSC
-
-         BAS=ABS(RADX(I-1)-RXPA(IP))
+         BAS=ABS(RADX(I-1)-XTMP)
          VX(-1)=0.5*(1.5-BAS/DX)**2
-         BAS=ABS(RADX(I)-RXPA(IP))
+         BAS=ABS(RADX(I)-XTMP)
          VX(0)=0.75-(BAS/DX)**2
-         BAS=ABS(RADX(I+1)-RXPA(IP))
+         BAS=ABS(RADX(I+1)-XTMP)
          VX(1)=0.5*(1.5-BAS/DX)**2
 
-         BAS=ABS(RADY(J-1)-RYPA(IP))
+         BAS=ABS(RADY(J-1)-YTMP)
          VY(-1)=0.5*(1.5-BAS/DY)**2
-         BAS=ABS(RADY(J)-RYPA(IP))
+         BAS=ABS(RADY(J)-YTMP)
          VY(0)=0.75-(BAS/DY)**2
-         BAS=ABS(RADY(J+1)-RYPA(IP))
+         BAS=ABS(RADY(J+1)-YTMP)
          VY(1)=0.5*(1.5-BAS/DY)**2
 
-         BAS=ABS(RADZ(K-1)-RZPA(IP))
+         BAS=ABS(RADZ(K-1)-ZTMP)
          VZ(-1)=0.5*(1.5-BAS/DZ)**2
-         BAS=ABS(RADZ(K)-RZPA(IP))
+         BAS=ABS(RADZ(K)-ZTMP)
          VZ(0)=0.75-(BAS/DZ)**2
-         BAS=ABS(RADZ(K+1)-RZPA(IP))
+         BAS=ABS(RADZ(K+1)-ZTMP)
          VZ(1)=0.5*(1.5-BAS/DZ)**2
-
 
          DO KZ=-1,1
          DO JY=-1,1
          DO IX=-1,1
-         I3=I+IX
-         J3=J+JY
-         K3=K+KZ
-         IF (I3.LT.1) I3=I3+NX
-         IF (I3.GT.NX) I3=I3-NX
-         IF (J3.LT.1) J3=J3+NY
-         IF (J3.GT.NY) J3=J3-NY
-         IF (K3.LT.1) K3=K3+NZ
-         IF (K3.GT.NZ) K3=K3-NZ
+            I3=I+IX
+            J3=J+JY
+            K3=K+KZ
+            IF (I3.LT.1) I3=I3+NX
+            IF (I3.GT.NX) I3=I3-NX
+            IF (J3.LT.1) J3=J3+NY
+            IF (J3.GT.NY) J3=J3-NY
+            IF (K3.LT.1) K3=K3+NZ
+            IF (K3.GT.NZ) K3=K3-NZ
 
-         U(I3,J3,K3)=MASAP(IP)*VX(IX)*VY(JY)*VZ(KZ)+U(I3,J3,K3)
-
+            INC_VAL = MASAP(IP)*VX(IX)*VY(JY)*VZ(KZ)
+            !atomic for avoiding data racing
+            !$OMP ATOMIC
+            U(I3,J3,K3) = U(I3,J3,K3) + INC_VAL
          END DO
          END DO
          END DO
-
-      ENDDO !loop on particles
+      ENDDO 
 
 !************************************************************************
    END SUBROUTINE DENS_INTERP_TSC
@@ -138,12 +131,14 @@ CONTAINS
       INTEGER IX, JY, KZ, I3, J3, K3
       REAL*4 RADX1, RADXNX, RADY1, RADYNY, RADZ1, RADZNZ, LENG
       REAL*4 VX(-1:1), VY(-1:1), VZ(-1:1)
-      REAL*4 BAS, WEI
+      REAL*4 BAS, WEI, XTMP, YTMP, ZTMP
+      REAL*4 INC_U2, INC_U3, INC_U4, INC_WT
       REAL*4, ALLOCATABLE :: WT(:,:,:)
 
       !output
       REAL*4 U2(NX,NY,NZ), U3(NX,NY,NZ), U4(NX,NY,NZ)
 
+      ALLOCATE(WT(NX,NY,NZ))
 
       ALLOCATE(WT(NX,NY,NZ))
    !$OMP PARALLEL DO SHARED(WT,NX,NY,NZ),PRIVATE(I,J,K),DEFAULT(NONE)
@@ -155,7 +150,6 @@ CONTAINS
       END DO
       END DO
 
-      !smallest/largest coordinates of the coarse grid
       RADX1=RADX(1)-0.5*DX
       RADXNX=RADX(NX)+0.5*DX
       RADY1=RADY(1)-0.5*DY
@@ -164,99 +158,95 @@ CONTAINS
       RADZNZ=RADZ(NZ)+0.5*DZ
       LENG=RADXNX-RADX1
 
-   !****   from lagrangian velocities (U2PA, U3PA, U4PA)  to eulerian using TSC
-      DO I=-1,1
-         VX(I)=0.0
-         VY(I)=0.0
-         VZ(I)=0.0
-      END DO
-
-      !LOW1=SUM(NPART(0:NLEVELS))
       LOW1=NPARTT
 
    !$OMP PARALLEL DO SHARED(LOW1,RXPA,RYPA,RZPA,RADX1,RADY1,RADZ1, &
    !$OMP     RADXNX,RADYNY,RADZNZ,LENG,DX,DY,DZ,NX,NY,NZ, &
    !$OMP     U2PA,U3PA,U4PA,U2,U3,U4,WT,RADX,RADY,RADZ), &
-   !$OMP PRIVATE(IP,BAS,I,J,K,VX,VY,VZ,IX,JY,KZ,I3,J3,K3), &
-   !$OMP DEFAULT(NONE)
+   !$OMP PRIVATE(IP,BAS,I,J,K,VX,VY,VZ,IX,JY,KZ,I3,J3,K3,XTMP,YTMP,ZTMP, &
+   !$OMP INC_U2, INC_U3, INC_U4, INC_WT), DEFAULT(NONE)
       DO IP=1, LOW1
+         XTMP = RXPA(IP)
+         YTMP = RYPA(IP)
+         ZTMP = RZPA(IP)
 
-         !move by LENG particles outside the grid
-         IF(RXPA(IP).LT.RADX1) RXPA(IP)=RXPA(IP)+LENG
-         IF(RXPA(IP).GE.RADXNX) RXPA(IP)=RXPA(IP)-LENG
-         IF(RYPA(IP).LT.RADY1) RYPA(IP)=RYPA(IP)+LENG
-         IF(RYPA(IP).GE.RADYNY) RYPA(IP)=RYPA(IP)-LENG
-         IF(RZPA(IP).LT.RADZ1) RZPA(IP)=RZPA(IP)+LENG
-         IF(RZPA(IP).GE.RADZNZ) RZPA(IP)=RZPA(IP)-LENG
+         IF(XTMP.LT.RADX1) XTMP=XTMP+LENG
+         IF(XTMP.GE.RADXNX) XTMP=XTMP-LENG
+         IF(YTMP.LT.RADY1) YTMP=YTMP+LENG
+         IF(YTMP.GE.RADYNY) YTMP=YTMP-LENG
+         IF(ZTMP.LT.RADZ1) ZTMP=ZTMP+LENG
+         IF(ZTMP.GE.RADZNZ) ZTMP=ZTMP-LENG
 
-         !initial position
-         !I,J,K: cell of the particle in the grid
-         BAS=RXPA(IP)
-         I=INT(((BAS-RADX(1))/DX)+0.49999) + 1
-         BAS=RYPA(IP)
-         J=INT(((BAS-RADY(1))/DY)+0.49999) + 1
-         BAS=RZPA(IP)
-         K=INT(((BAS-RADZ(1))/DZ)+0.49999) + 1
+         I=INT(((XTMP-RADX(1))/DX)+0.49999) + 1
+         J=INT(((YTMP-RADY(1))/DY)+0.49999) + 1
+         K=INT(((ZTMP-RADZ(1))/DZ)+0.49999) + 1
 
-   !***  using a cell in cloud scheme (TSC) to transform lagrangian velocities (DM part) into eulerian
-         BAS=ABS(RADX(I-1)-RXPA(IP))
+         BAS=ABS(RADX(I-1)-XTMP)
          VX(-1)=0.5*(1.5-BAS/DX)**2
-         BAS=ABS(RADX(I)-RXPA(IP))
+         BAS=ABS(RADX(I)-XTMP)
          VX(0)=0.75-(BAS/DX)**2
-         BAS=ABS(RADX(I+1)-RXPA(IP))
+         BAS=ABS(RADX(I+1)-XTMP)
          VX(1)=0.5*(1.5-BAS/DX)**2
 
-         BAS=ABS(RADY(J-1)-RYPA(IP))
+         BAS=ABS(RADY(J-1)-YTMP)
          VY(-1)=0.5*(1.5-BAS/DY)**2
-         BAS=ABS(RADY(J)-RYPA(IP))
+         BAS=ABS(RADY(J)-YTMP)
          VY(0)=0.75-(BAS/DY)**2
-         BAS=ABS(RADY(J+1)-RYPA(IP))
+         BAS=ABS(RADY(J+1)-YTMP)
          VY(1)=0.5*(1.5-BAS/DY)**2
 
-         BAS=ABS(RADZ(K-1)-RZPA(IP))
+         BAS=ABS(RADZ(K-1)-ZTMP)
          VZ(-1)=0.5*(1.5-BAS/DZ)**2
-         BAS=ABS(RADZ(K)-RZPA(IP))
+         BAS=ABS(RADZ(K)-ZTMP)
          VZ(0)=0.75-(BAS/DZ)**2
-         BAS=ABS(RADZ(K+1)-RZPA(IP))
+         BAS=ABS(RADZ(K+1)-ZTMP)
          VZ(1)=0.5*(1.5-BAS/DZ)**2
-
 
          DO KZ=-1,1
          DO JY=-1,1
          DO IX=-1,1
-         I3=I+IX
-         J3=J+JY
-         K3=K+KZ
-         IF (I3.LT.1) I3=I3+NX
-         IF (I3.GT.NX) I3=I3-NX
-         IF (J3.LT.1) J3=J3+NY
-         IF (J3.GT.NY) J3=J3-NY
-         IF (K3.LT.1) K3=K3+NZ
-         IF (K3.GT.NZ) K3=K3-NZ
+            I3=I+IX
+            J3=J+JY
+            K3=K+KZ
+            IF (I3.LT.1) I3=I3+NX
+            IF (I3.GT.NX) I3=I3-NX
+            IF (J3.LT.1) J3=J3+NY
+            IF (J3.GT.NY) J3=J3-NY
+            IF (K3.LT.1) K3=K3+NZ
+            IF (K3.GT.NZ) K3=K3-NZ
+            
+            INC_WT = VX(IX)*VY(JY)*VZ(KZ)
+            INC_U2 = U2PA(IP)*INC_WT
+            INC_U3 = U3PA(IP)*INC_WT
+            INC_U4 = U4PA(IP)*INC_WT
 
-         U2(I3,J3,K3)=U2PA(IP)*VX(IX)*VY(JY)*VZ(KZ)+U2(I3,J3,K3)
-         U3(I3,J3,K3)=U3PA(IP)*VX(IX)*VY(JY)*VZ(KZ)+U3(I3,J3,K3)
-         U4(I3,J3,K3)=U4PA(IP)*VX(IX)*VY(JY)*VZ(KZ)+U4(I3,J3,K3)
-         WT(I3,J3,K3)=VX(IX)*VY(JY)*VZ(KZ)+WT(I3,J3,K3)
-
+            !atomic for avoiding data racing
+            !$OMP ATOMIC
+            U2(I3,J3,K3) = U2(I3,J3,K3) + INC_U2
+            !$OMP ATOMIC
+            U3(I3,J3,K3) = U3(I3,J3,K3) + INC_U3
+            !$OMP ATOMIC
+            U4(I3,J3,K3) = U4(I3,J3,K3) + INC_U4
+            !$OMP ATOMIC
+            WT(I3,J3,K3) = WT(I3,J3,K3) + INC_WT
          END DO
          END DO
          END DO
-
-      ENDDO !loop on particles
+      ENDDO 
 
       WRITE(*,*) '     Fraction of cells without particles (TSC):', REAL(COUNT(WT .EQ. 0.))/REAL(NX*NY*NZ)
 
-      DO K=1,NX
-      DO J=1,NY
-      DO I=1,NZ
-      WEI=WT(I,J,K)
-      IF(WT(I,J,K)==0.) WEI=1.D0
-      U2(I,J,K)=U2(I,J,K)/WEI
-      U3(I,J,K)=U3(I,J,K)/WEI
-      U4(I,J,K)=U4(I,J,K)/WEI
-      END DO
-      END DO
+   !$OMP PARALLEL DO SHARED(U2,U3,U4,WT,NX,NY,NZ), PRIVATE(I,J,K,WEI), DEFAULT(NONE)
+      DO K=1,NZ
+         DO J=1,NY
+            DO I=1,NX
+               WEI=WT(I,J,K)
+               IF(WEI==0.0) WEI=1.0
+               U2(I,J,K)=U2(I,J,K)/WEI
+               U3(I,J,K)=U3(I,J,K)/WEI
+               U4(I,J,K)=U4(I,J,K)/WEI
+            END DO
+         END DO
       END DO
 
       DEALLOCATE(WT)
@@ -313,15 +303,15 @@ CONTAINS
                   NEIGH = QUERY%idx
          
                   IF (DIST(KNEIGHBOURS).GT.DX) THEN
-                  CONTA=KNEIGHBOURS 
+                     CONTA=KNEIGHBOURS 
                   ELSE 
-                  DEALLOCATE(DIST,NEIGH)
-                  !.true. stands for sorting
-                  QUERY = ball_search(TREE, TAR, DX, .true.)
-                  CONTA = SIZE(QUERY%dist)
-                  ALLOCATE(DIST(CONTA), NEIGH(CONTA))
-                  DIST = QUERY%dist
-                  NEIGH = QUERY%idx
+                     DEALLOCATE(DIST,NEIGH)
+                     !.true. stands for sorting
+                     QUERY = ball_search(TREE, TAR, DX, .true.)
+                     CONTA = SIZE(QUERY%dist)
+                     ALLOCATE(DIST(CONTA), NEIGH(CONTA))
+                     DIST = QUERY%dist
+                     NEIGH = QUERY%idx
                   END IF
 
                   !!!! For SPH density interpolation !!!!!!!!!!!!
@@ -346,7 +336,7 @@ CONTAINS
 
 
 !********************************************************************************
-   SUBROUTINE DDENS_INTERP_SPH(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA, &
+   SUBROUTINE DDENS_INTERP_SPH_ATOMIC(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA, &
                   HPART,MASAP,U)
 !using HPART, smoothing lenght given
 !by the furthest cell to which the particle contributes in the
@@ -476,8 +466,141 @@ CONTAINS
          !FOR THE MOMENT U IS MASS
 
 !************************************************************************
-   END SUBROUTINE DDENS_INTERP_SPH
+   END SUBROUTINE DDENS_INTERP_SPH_ATOMIC
 !************************************************************************
+
+!********************************************************************************
+   SUBROUTINE DDENS_INTERP_SPH_DBLE(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA,HPART,MASAP,U)
+!using HPART, smoothing lenght given
+!by the furthest cell to which the particle contributes in the
+!velocity interpolation
+!********************************************************************************
+         USE COMMONDATA, ONLY: DX,DY,DZ,RADX,RADY,RADZ,PARTIRED
+
+         IMPLICIT NONE
+         !input variables
+         INTEGER NX,NY,NZ
+         INTEGER(KIND=8) :: NPARTT, I
+         REAL*4 RXPA(PARTIRED),RYPA(PARTIRED),RZPA(PARTIRED)
+         REAL*4 MASAP(PARTIRED)
+
+         !LOCAL
+         INTEGER :: IX,JY,KZ,IX2,JY2,KZ2
+
+         !grid position for each particle
+         REAL :: RX1,RY1,RZ1
+         INTEGER :: XGRIDPOS(NPARTT),YGRIDPOS(NPARTT),ZGRIDPOS(NPARTT)
+
+         !INTERPOLATION VARIABLES
+         REAL*4 :: H,DDIST,NORM
+         INTEGER :: INCREX,INCREY,INCREZ
+         
+         !SPH related
+         REAL*4 :: HPART(NPARTT)
+
+         !REAL*8 precision auxiliary U
+         REAL*8, ALLOCATABLE :: U8(:,:,:)
+
+         !output
+         REAL*4 U(NX,NY,NZ)
+
+         !! Locate particles in grid !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         !grid first cell center
+         RX1 = RADX(1)
+         RY1 = RADY(1)
+         RZ1 = RADZ(1)   
+         !$OMP PARALLEL DO SHARED(NPARTT,RXPA,RYPA,RZPA,DX,DY,DZ, &
+         !$OMP                    RX1,RY1,RZ1,XGRIDPOS,YGRIDPOS,ZGRIDPOS), &
+         !$OMP            PRIVATE(I,IX,JY,KZ), DEFAULT(NONE)
+         DO I=1,NPARTT 
+            IX = INT((RXPA(I)-RX1)/DX)+1
+            JY = INT((RYPA(I)-RY1)/DY)+1
+            KZ = INT((RZPA(I)-RZ1)/DZ)+1
+            XGRIDPOS(I) = IX
+            YGRIDPOS(I) = JY
+            ZGRIDPOS(I) = KZ
+         END DO
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+         !Alloc U8
+         ALLOCATE(U8(NX,NY,NZ))
+
+         !$OMP PARALLEL DO SHARED(NPARTT,XGRIDPOS,YGRIDPOS,ZGRIDPOS,HPART, &
+         !$OMP                   RXPA,RYPA,RZPA,MASAP,RADX,RADY,RADZ, &
+         !$OMP                   DX,DY,DZ,NX,NY,NZ), &
+         !$OMP PRIVATE(I,IX,JY,KZ,IX2,JY2,KZ2,H,INCREX,INCREY,INCREZ,DDIST,NORM), &
+         !$OMP REDUCTION(+:U8), &
+         !$OMP SCHEDULE(DYNAMIC), DEFAULT(NONE)
+         DO I=1,NPARTT
+            IX = XGRIDPOS(I)
+            JY = YGRIDPOS(I)
+            KZ = ZGRIDPOS(I)
+            H = HPART(I)
+            INCREX = INT(2*H/DX + 0.5) !0.5 accounts for the fact that
+            INCREY = INT(2*H/DY + 0.5) !we are using the center of the cell
+            INCREZ = INT(2*H/DZ + 0.5) !as the reference point
+
+            !First, find normalisation factor
+            NORM = 0.
+            DO KZ2=KZ-INCREZ,KZ+INCREZ
+               IF (KZ2.LT.1 .OR. KZ2.GT.NZ) CYCLE
+               DO JY2=JY-INCREY,JY+INCREY
+                  IF (JY2.LT.1 .OR. JY2.GT.NY) CYCLE
+                  DO IX2=IX-INCREX,IX+INCREX
+                     IF (IX2.LT.1 .OR. IX2.GT.NX) CYCLE
+                        !DISTANCE BETWEEN PARTICLE AND GRID POINT
+                        DDIST = ( (RXPA(I)-RADX(IX2))**2 + &
+                                  (RYPA(I)-RADY(JY2))**2 + &
+                                  (RZPA(I)-RADZ(KZ2))**2 )**0.5
+
+                        !KERNEL FUNCTION
+                        CALL KERNEL_FUNC_2(H,DDIST)
+                        
+                        NORM = NORM + DDIST
+                  ENDDO
+               ENDDO
+            ENDDO
+
+            ! Particle only contributes to its own cell
+            IF (NORM .EQ. 0.) THEN
+               U8(IX,JY,KZ) = U8(IX,JY,KZ) + REAL(MASAP(I), KIND=8)
+               CYCLE
+            ENDIF
+
+            !Now, interpolate
+            DO KZ2=KZ-INCREZ,KZ+INCREZ
+               IF (KZ2.LT.1 .OR. KZ2.GT.NZ) CYCLE
+               DO JY2=JY-INCREY,JY+INCREY
+                  IF (JY2.LT.1 .OR. JY2.GT.NY) CYCLE
+                  DO IX2=IX-INCREX,IX+INCREX
+                     IF (IX2.LT.1 .OR. IX2.GT.NX) CYCLE
+                        !DISTANCE BETWEEN PARTICLE AND GRID POINT
+                        DDIST = ( (RXPA(I)-RADX(IX2))**2 + &
+                                 (RYPA(I)-RADY(JY2))**2 + &
+                                 (RZPA(I)-RADZ(KZ2))**2 )**0.5
+
+                        !KERNEL FUNCTION
+                        CALL KERNEL_FUNC_2(H,DDIST)
+                        
+                        !Update
+                        U8(IX2,JY2,KZ2) = U8(IX2,JY2,KZ2) + REAL(DDIST*MASAP(I)/NORM, KIND=8)
+                  ENDDO
+               ENDDO
+            ENDDO
+         END DO
+
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+         !CONVERT REAL*8 TO REAL*4 AFTER INTERPOLATION
+         U = REAL(U8, KIND=4)
+         DEALLOCATE(U8)
+
+         !FOR THE MOMENT U IS MASS
+
+!************************************************************************
+   END SUBROUTINE DDENS_INTERP_SPH_DBLE
+!************************************************************************
+
 
 
 !********************************************************************************
@@ -702,7 +825,7 @@ CONTAINS
 
          !$OMP PARALLEL DO SHARED(KNEIGHBOURS,NX,NY,NZ,MASAP,U2PA,U3PA,U4PA,U2,U3,U4, &
          !$OMP                   TREE,DX,DY,DZ,RADX,RADY,RADZ,PART_DENS,SMASK) &
-         !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,DIST8,NEIGH, & 
+         !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,DIST8,NEIGH, &
          !$OMP               HKERN,BAS8,BAS8X,BAS8Y,BAS8Z,CONTA), REDUCTION(MAX:HPART) &
          !$OMP SCHEDULE(DYNAMIC), DEFAULT(NONE)
          DO KZ=1,NZ
@@ -768,6 +891,7 @@ CONTAINS
                      BAS8Y=BAS8Y+DIST8(I)*U3PA(NEIGH(I))
                      BAS8Z=BAS8Z+DIST8(I)*U4PA(NEIGH(I))
                   END DO
+
                   U2(IX,JY,KZ)=BAS8X/BAS8
                   U3(IX,JY,KZ)=BAS8Y/BAS8
                   U4(IX,JY,KZ)=BAS8Z/BAS8

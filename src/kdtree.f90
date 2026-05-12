@@ -827,7 +827,7 @@ contains
                 look_opposite = .false.
                 if (d1d**2 < dist_furthest) look_opposite = .true.
 #if periodic == 1
-                if (targett(axis) - dist_furthest <= -L(axis) / 2. ) look_opposite = .true.
+                if (targett(axis) - sqrt(dist_furthest) <= -L(axis) / 2. ) look_opposite = .true.
 #endif
                 if (look_opposite .eqv. .true.) then
                     call knn_search_recursive_hyperp(node%right, targett, idx, dist, k)
@@ -839,7 +839,7 @@ contains
                 look_opposite = .false.
                 if (d1d**2 < dist_furthest) look_opposite = .true.
 #if periodic == 1
-                if (targett(axis) + dist_furthest >= L(axis) / 2. ) look_opposite = .true.
+                if (targett(axis) + sqrt(dist_furthest) >= L(axis) / 2. ) look_opposite = .true.
 #endif
                 if (look_opposite .eqv. .true.) then
                     call knn_search_recursive_hyperp(node%left, targett, idx, dist, k)

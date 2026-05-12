@@ -60,6 +60,7 @@
        ! VOIDS
        INTEGER :: NVOID, NVOIDP, NVOIDT, NVOID2
        INTEGER :: I, IV, IND, INDP
+       INTEGER*8 :: I8
        REAL*8 :: VOLT_CLEAN, VOLM
        REAL*4 :: REQPP
 
@@ -402,6 +403,14 @@
        ENDIF
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       !!!!!!!!!!!! CHECK HDF5 - GADGET
+       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       IF (FLAG_DATA .EQ. 3) THEN
+#if use_hdf5 == 0
+         STOP 'HDF5 deactivated at compilation time but FLAG_DATA=3'
+#endif
+       ENDIF
 
 !***********************************************************************
 !***********************************************************************
@@ -483,7 +492,7 @@
 !*-------------------------------------------------------------------------------*
 !*     READING AND SETTING DATA 
 !*-------------------------------------------------------------------------------*
-       
+
        IF (FLAG_DATA .EQ. 0) THEN
          WRITE(*,*) 'MASCLET data...'
          call system_clock(t1,trate,tmax)
@@ -543,12 +552,12 @@
          FLAG_STOP = 0
          
          !$OMP PARALLEL SHARED(NPARTT, RXPA, RYPA, RZPA, LADO0), &
-         !$OMP PRIVATE(I)
+         !$OMP PRIVATE(I8)
          !$OMP DO REDUCTION(+:FLAG_STOP)
-         DO I =1,NPARTT
-            IF ( (RXPA(I) .LT. -LADO0/2 .OR. RXPA(I) .GT. LADO0/2) .OR. &
-                 (RYPA(I) .LT. -LADO0/2 .OR. RYPA(I) .GT. LADO0/2) .OR. &
-                 (RZPA(I) .LT. -LADO0/2 .OR. RZPA(I) .GT. LADO0/2) ) THEN
+         DO I8=1,NPARTT
+            IF ( (RXPA(I8) .LT. -LADO0/2 .OR. RXPA(I8) .GT. LADO0/2) .OR. &
+                 (RYPA(I8) .LT. -LADO0/2 .OR. RYPA(I8) .GT. LADO0/2) .OR. &
+                 (RZPA(I8) .LT. -LADO0/2 .OR. RZPA(I8) .GT. LADO0/2) ) THEN
                   FLAG_STOP = 1
             ENDIF
          ENDDO
@@ -608,6 +617,7 @@
 
        WRITE(*,*)
 
+
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        ! Building k-d tree
@@ -639,20 +649,35 @@
          HPART(:) = 0.
          PART_DENS(:) = 0.
          TREEPOINTS(:,1) = RXPA(1:NPARTT)
+         DEALLOCATE(RXPA)
          TREEPOINTS(:,2) = RYPA(1:NPARTT)
+         DEALLOCATE(RYPA)
          TREEPOINTS(:,3) = RZPA(1:NPARTT)
+         DEALLOCATE(RZPA)
 
 #if periodic == 1
             LPERIODIC = [LADO0, LADO0, LADO0]
             call system_clock(t1,trate,tmax)
             TREE => build_kdtree(TREEPOINTS,LPERIODIC)
             call system_clock(t2,trate,tmax)
-
 #else
             call system_clock(t1,trate,tmax)
             TREE => build_kdtree(TREEPOINTS)
             call system_clock(t2,trate,tmax)
 #endif
+
+         ALLOCATE(RXPA(PARTIRED),RYPA(PARTIRED),RZPA(PARTIRED))
+         !$OMP PARALLEL DO SHARED(PARTIRED,RXPA,RYPA,RZPA), &
+         !$OMP            PRIVATE(I8)
+         DO I8=1,PARTIRED
+            RXPA(I8)=0.0
+            RYPA(I8)=0.0
+            RZPA(I8)=0.0
+         END DO
+         RXPA(1:NPARTT) = TREEPOINTS(:,1)
+         RYPA(1:NPARTT) = TREEPOINTS(:,2)
+         RZPA(1:NPARTT) = TREEPOINTS(:,3)
+         DEALLOCATE(TREEPOINTS)
 
          WRITE(*,*) '///////////// Time (sec) spent building k-d tree ',float(t2-t1)/1.e3
          WRITE(*,*)
@@ -979,6 +1004,7 @@
                                  HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                                  U2DMCO,U3DMCO,U4DMCO)
 
+
                ENDIF
                call system_clock(t2,trate,tmax)
 
@@ -1049,7 +1075,7 @@
 
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-          ! BINARY PART FILE or AREPO: hierarchy does not matter
+          ! BINARY PART FILE or GADGET-like: hierarchy does not matter
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
           ELSE IF (FLAG_DATA .EQ. 1 .OR. FLAG_DATA .EQ. 3) THEN
@@ -1119,7 +1145,7 @@
                   CALL H_DISTANCE(NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
                ENDIF
 
-               CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
+               CALL DDENS_INTERP_SPH_ATOMIC(NXX,NYY,NZZ,NPARTT, &
                                           RXPA,RYPA,RZPA,HPART,MASAP,U1DMCO) !--> U1DMCO
                                     
             ENDIF
@@ -1176,7 +1202,7 @@
 
                WRITE(*,*) 'Applying density SPH KERNEL!'
 
-               CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
+               CALL DDENS_INTERP_SPH_ATOMIC(NXX,NYY,NZZ,NPARTT, &
                                      RXPA,RYPA,RZPA,HPART,MASAP,U1DMCO) !--> U1DMCO
                                     
             ENDIF
@@ -1253,25 +1279,37 @@
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+
+         !---------------------------------------
+         ! Deallocate k-d tree variables
+         !--------------------------------------- 
+         IF (FLAG_KD .EQ. 1) THEN
+            CALL deallocate_kdtree(TREE)
+            DEALLOCATE(HPART)
+            DEALLOCATE(PART_DENS)
+         ENDIF
+         !---------------------------------------
+
          !* Which density components to consider
           ALLOCATE(U1CO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
           IF(FLAG_DENS .EQ. 0) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO + U1GCO
           IF(FLAG_DENS .EQ. 1) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO
           IF(FLAG_DENS .EQ. 2) U1CO(1:NXX,1:NYY,1:NZZ) = U1GCO
 
-         ! !* Until here, density is in rho_background units -> to units of mean density
-         !  IF(FLAG_DATA .NE. 2) THEN
-         !    U1CO = U1CO*ROTE
-         !    MEANDENS = SUM(U1CO(1:NXX,1:NYY,1:NZZ)*SMASK(1:NXX,1:NYY,1:NZZ)) &
-         !                      / REAL(COUNT(SMASK>0))
-         !    U1CO = U1CO / MEANDENS !rho/rhomean
-         !    MEANDENS = MEANDENS * (UM / UL**3)
-         !    WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
-         !                MEANDENS / (RODO * (UM / UL**3))
+         !* Until here, density is in rho_background units -> to units of mean density
+          IF(FLAG_DATA .NE. 2) THEN
+            U1CO = U1CO*ROTE
+            MEANDENS = SUM(U1CO(1:NXX,1:NYY,1:NZZ), &
+                              MASK=(SMASK(1:NXX,1:NYY,1:NZZ) == 1)) / &
+                                       REAL(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1))
+            U1CO = U1CO / MEANDENS !rho/rhomean
+            MEANDENS = MEANDENS * (UM / UL**3)
+            WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
+                        MEANDENS / (RODO * (UM / UL**3))
 
-         !  ELSE !GRID input overdensity: assumed in rho_background units
-         !    MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
-         !  ENDIF
+          ELSE !GRID input overdensity: assumed in rho_background units
+            MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
+          ENDIF
  
          !* Which divergence components to consider
           ALLOCATE(DIVERCO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
@@ -1334,9 +1372,10 @@
           ENDDO
 
           WRITE(*,*)
-          WRITE(*,*) 'Volume fraction allowed to belong to a void: ', REAL(COUNT(FLAG_SUB .GT. 0)) &
-                                                                     /REAL(COUNT(SMASK>0))
-          WRITE(*,*) 'Potential void centres, fraction ', CONTA, REAL(CONTA)/REAL(COUNT(SMASK>0))
+          WRITE(*,*) 'Volume fraction allowed to belong to a void: ', REAL(COUNT(FLAG_SUB .GT. 0))/ &
+                                                                  REAL(COUNT(SMASK==1))
+          WRITE(*,*) 'Potential void centres, fraction ', CONTA, REAL(CONTA)/ &
+                                                                  REAL(COUNT(SMASK==1))
           WRITE(*,*) 
           WRITE(*,*)
 
@@ -1429,7 +1468,7 @@
           WRITE(*,*) 'Num. Cells in voids', COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0)
           WRITE(*,*) 'Number of voids after merging:', NVOID2
           WRITE(*,*) 'FF (Volume)', REAL(COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0)) &
-                                     / REAL(COUNT(SMASK > 0))
+                                     / REAL(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1))
           WRITE(*,*) '************************************************'
           WRITE(*,*)
 
@@ -1668,14 +1707,14 @@
 
           !Binary 3D maps 
           !(STREAM -> no headers or structure, open with Numpy)
-          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', status='UNKNOWN')!, ACCESS = 'STREAM') 
+          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', status='UNKNOWN', ACCESS = 'STREAM') 
 
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !3D arrays file
           WRITE(*,*) '************* OUTPUT ******************'
           WRITE(*,*) 'Writing 3D arrays:',NXX,NYY,NZZ
-         !  WRITE(11) (((MARCA(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+          WRITE(11) (((MARCA(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
           WRITE(11) (((-1. + U1CO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
           WRITE(11) (((DIVERCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1862,17 +1901,6 @@
          DEALLOCATE(U11G,U12G,U13G,U14G,U11S,U11DM)
          DEALLOCATE(U2PA,U3PA,U4PA,RXPA,RYPA,RZPA,MASAP)
        ENDIF
-
-      !---------------------------------------
-      ! Deallocate k-d tree variables (if needed)
-      !--------------------------------------- 
-       IF (FLAG_KD .EQ. 1) THEN
-         CALL deallocate_kdtree(TREE)
-         DEALLOCATE(TREEPOINTS)
-         DEALLOCATE(HPART)
-         DEALLOCATE(PART_DENS)
-       ENDIF
-      !---------------------------------------
 
 !*////////////////////////////////////
 !*////////////////////////////////////
