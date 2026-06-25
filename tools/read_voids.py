@@ -319,27 +319,30 @@ def read_void_map(it, path='', output_marca=True, output_deltaTot=True, output_d
         deltaTot = []
     if output_div:
         div = []
-
-    with FF(os.path.join(path, f'map{it:05d}')) as f:
+    filepath = os.path.join(path, f'map{it:05d}')
+    with open(filepath, 'rb') as f:
         for ilev in range(nlev):
             nx_lev = int(nmax * 2**ilev)
             ny_lev = int(nmay * 2**ilev)
             nz_lev = int(nmaz * 2**ilev)
+            sizeArr = nx_lev * ny_lev * nz_lev
             if output_marca:
-                marca.append(f.read_ints('i4').reshape((nx_lev, ny_lev, nz_lev), order='F'))
+                data = np.fromfile(f, dtype=np.int32, count=sizeArr)
+                marca.append(data.reshape((nx_lev, ny_lev, nz_lev), order='F'))
             else:
-                f.read_ints('i4')
+                f.seek(sizeArr * 4, os.SEEK_CUR)
 
             if output_deltaTot:
-                deltaTot.append(f.read_reals('f4').reshape((nx_lev, ny_lev, nz_lev), order='F'))
+                data = np.fromfile(f, dtype=np.float32, count=sizeArr)
+                deltaTot.append(data.reshape((nx_lev, ny_lev, nz_lev), order='F'))
             else:
-                f.read_reals('f4')
-
+                f.seek(sizeArr * 4, os.SEEK_CUR)
 
             if output_div:
-                div.append(f.read_reals('f4').reshape((nx_lev, ny_lev, nz_lev), order='F'))
+                data = np.fromfile(f, dtype=np.float32, count=sizeArr)
+                div.append(data.reshape((nx_lev, ny_lev, nz_lev), order='F'))
             else:
-                f.read_reals('f4')
+                f.seek(sizeArr * 4, os.SEEK_CUR)
                 
 
     output = []
