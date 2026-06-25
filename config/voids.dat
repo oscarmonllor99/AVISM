@@ -3,17 +3,17 @@
 *       General parameters block                                      
 *******************************************************************************
 files: first, last, every ---------------------------------------------------->
-1,1,1
+1200,1200,1
 cells for the coarser grid --------------------------------------------------->
-650,650,650
+128,128,128
 min and max levels of the hierarchies to be used by voidfind   --------------->
 0,0
 Hubble constant (h), omega matter -------------------------------------------->
 0.678,0.31
 box size --------------------------------------------------------------------->
-1292.484
+147.5
 periodic boundary conditions -> 0: no, 1: yes -------------------------------->
-0
+1
 *******************************************************************************
 *       Void finder input parameters                                      
 *******************************************************************************
@@ -35,20 +35,20 @@ min void radius to look for subvoids (in Mpc) -------------------------------->
 *       Type of data to process                                   
 *******************************************************************************
 type of data -> 0:MASCLET, 1:BinPart, 2:BinGrid, 3:GADGET-like --------------->
-1
+0
 IF MASCLET or Grid data: NX, NY, NZ (INPUT coarse grid size) ----------------->
 128,128,128
 IF GADGET-like: files per snapshot, PartType (1:gas, 2:dm), DM mass (Msun) --->
 16,2,4.52E10
 GADGET-like reader: 0:IllustrisTNG, 1:FLAMINGO-DMO --------------------------->
 1
-IF SURVEY: input mask (0:yes, 1:no) ------------------------------------------>
-1
+IF SURVEY -> 0:yes, 1:no ----------------------------------------------------->
+0
 *******************************************************************************
 *       Particle data handling parameters                                   
 *******************************************************************************
 maximum number of particles to read (DIMENSIONING) --------------------------->
-50000000
+800000000
 particle velocity is available -> 0: no, 1: yes ------------------------------>
 1
 interpolation scheme for particle velocity field (0:TSC, 1:SPH) -------------->
@@ -56,7 +56,7 @@ interpolation scheme for particle velocity field (0:TSC, 1:SPH) -------------->
 interpolation scheme for particle density field (0:TSC, 1:SPH) --------------->
 1
 Number of nearest neighbours to use to transform into grid ------------------->
-16
+256
 *******************************************************************************
 *       Output management parameters
 *******************************************************************************
