@@ -754,9 +754,9 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
 !*----------------------------------------------------------*
 !*      cross-match all voids to find all the overlappings
 !*----------------------------------------------------------*
-     GXC(:)=0 !center of the void
-     GYC(:)=0
-     GZC(:)=0
+     GXC(:)=0. !center of the void
+     GYC(:)=0.
+     GZC(:)=0.
      VOLNEW(:)=0. !new volume of the void
 
      !Geometrical centre of void and volume
@@ -852,7 +852,7 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
                         DIST2 =(ICX(IND1)-IX)**2 + (ICY(IND1)-JY)**2 + (ICZ(IND1)-KZ)**2
                         IF( DIST2 .LT. DIST) THEN
                            IND0=MARCA(IX,JY,KZ)
-                           DIST2 = DIST
+                           DIST = DIST2
                         ENDIF 
                      ENDIF
                   ENDDO
@@ -862,6 +862,13 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
             !IF ANOTHER VOID, DEFINE OWNERSHIP
             IF(IND0 .NE. IND1) THEN
                UVOID(IND1)=IND0
+
+               !redefine center of IND0 with Volume Weighted Center
+               GXC(IND0) = (GXC(IND0)*VOLNEW(IND0) + GXC(IND1)*VOLNEW(IND1))/(VOLNEW(IND0)+VOLNEW(IND1))
+               GYC(IND0) = (GYC(IND0)*VOLNEW(IND0) + GYC(IND1)*VOLNEW(IND1))/(VOLNEW(IND0)+VOLNEW(IND1))
+               GZC(IND0) = (GZC(IND0)*VOLNEW(IND0) + GZC(IND1)*VOLNEW(IND1))/(VOLNEW(IND0)+VOLNEW(IND1))
+               
+               !update volume
                VOLNEW(IND0)=VOLNEW(IND0)+VOLNEW(IND1)
 
                !cells belong IND0
@@ -872,11 +879,6 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
                      ENDDO
                   ENDDO
                ENDDO
-
-               !redefine center of IND0 with Volume Weighted Center
-               GXC(IND0) = (GXC(IND0)*VOLNEW(IND0) + GXC(IND1)*VOLNEW(IND1))/(VOLNEW(IND0)+VOLNEW(IND1))
-               GYC(IND0) = (GYC(IND0)*VOLNEW(IND0) + GYC(IND1)*VOLNEW(IND1))/(VOLNEW(IND0)+VOLNEW(IND1))
-               GZC(IND0) = (GZC(IND0)*VOLNEW(IND0) + GZC(IND1)*VOLNEW(IND1))/(VOLNEW(IND0)+VOLNEW(IND1))
 
                NVOID2=NVOID2-1
 
@@ -957,6 +959,11 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
 
             UVOID(IND2)=IND0
 
+            !redefine center of IND0 with Volume Weighted Center
+            GXC(IND0) = (GXC(IND0)*VOLNEW(IND0) + GXC(IND2)*VOLNEW(IND2))/(VOLNEW(IND0)+VOLNEW(IND2))
+            GYC(IND0) = (GYC(IND0)*VOLNEW(IND0) + GYC(IND2)*VOLNEW(IND2))/(VOLNEW(IND0)+VOLNEW(IND2))
+            GZC(IND0) = (GZC(IND0)*VOLNEW(IND0) + GZC(IND2)*VOLNEW(IND2))/(VOLNEW(IND0)+VOLNEW(IND2))
+
             !update volume
             VOLNEW(IND0)=VOLNEW(IND0)+VOLNEW(IND2)
             
@@ -970,11 +977,6 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
                   ENDDO
                ENDDO
             ENDDO
-
-            !redefine center of IND0 with Volume Weighted Center
-            GXC(IND0) = (GXC(IND0)*VOLNEW(IND0) + GXC(IND2)*VOLNEW(IND2))/(VOLNEW(IND0)+VOLNEW(IND2))
-            GYC(IND0) = (GYC(IND0)*VOLNEW(IND0) + GYC(IND2)*VOLNEW(IND2))/(VOLNEW(IND0)+VOLNEW(IND2))
-            GZC(IND0) = (GZC(IND0)*VOLNEW(IND0) + GZC(IND2)*VOLNEW(IND2))/(VOLNEW(IND0)+VOLNEW(IND2))
 
             !do not consider IND2 anymore
             NVOID2=NVOID2-1

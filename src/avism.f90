@@ -37,7 +37,9 @@
        real*4 :: RODO,T0,RE0,ACHE,ACHE0,OMEGA0,ROCRIT
        REAL*4 :: T,ZETA
        REAL*4 :: RETE,ROTE,HTE
-       REAL*4 :: MEANDENS, TOTALMASS
+       !
+       REAL*4 :: MEANDENS, MEANRATIO
+       REAL*8 :: MEANDENS8
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
        ! GRID
@@ -51,10 +53,17 @@
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
        ! SURVEYS
-       INTEGER :: FLAG_MASK
+       INTEGER :: FLAG_SURVEY
        INTEGER :: NMASK,J,K,I2,J2,K2,NDOWN
        REAL*4 :: MASKLOW, MASKUPPER, MASKSIDE
        INTEGER*1, ALLOCATABLE, DIMENSION(:,:,:) :: SMASK,SMASK2
+       !---rands
+       REAL*4, ALLOCATABLE :: RANDX(:),RANDY(:),RANDZ(:),MASSRAND(:)
+       REAL*4, ALLOCATABLE :: HRAND(:)
+       REAL*8 :: DSUM, RSUM, ALPHA, RANDSTD, RANDMEAN, HRANDMAX
+       REAL*4 :: RATIOFLOOR, RATIOMAX
+       INTEGER*4 :: NRAND
+       REAL*4, ALLOCATABLE :: U1RAND(:,:,:)
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
          
        ! VOIDS
@@ -89,6 +98,10 @@
 
        !MISC
        INTEGER :: FLAG_STOP
+       INTEGER*4 :: BASSINT
+       INTEGER*8 :: BASSINT8
+       REAL*8 :: BASS8
+       REAL*4 :: BASS
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
       !  !!!!!!!!!!!!!!
@@ -102,10 +115,11 @@
       !  !!!!!!!!!!!!!!
 
        !kd-tree and SPH Related
+       INTEGER :: KNEIGHBOURS, KNEIGHBOURS2
        INTEGER :: FLAG_KD
        REAL, ALLOCATABLE :: HPART(:)
        REAL, ALLOCATABLE :: PART_DENS(:)
-       type(KDTreeNode), pointer :: TREE
+       type(KDTreeNode), pointer :: TREE,TREERAND
        REAL*4, ALLOCATABLE :: TREEPOINTS(:,:)
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
@@ -207,7 +221,7 @@
        READ(1,*)
        READ(1,*) FLAG_GADGET_READER
        READ(1,*)
-       READ(1,*) FLAG_MASK
+       READ(1,*) FLAG_SURVEY
        READ(1,*) !****************************************************
        READ(1,*) !*       Particle data handling parameters            *
        READ(1,*) !****************************************************
@@ -256,15 +270,14 @@
             STOP
          ENDIF
 #endif
-
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        ! Check periodic boundary conditions consistency with SURVEY/MASKING
-       IF (FLAG_MASK .EQ. 1) THEN
+       IF (FLAG_SURVEY .EQ. 1) THEN
          IF (FLAG_PERIOD .EQ. 1) THEN
-            WRITE(*,*) 'WARNING: PBCs considered in voids.dat but SURVEY/MASKED data provided!!!!!'
+            WRITE(*,*) 'WARNING: PBCs considered in voids.dat but SURVEY/MASKED conditions activated!!!!!'
             STOP
          ENDIF
        ENDIF
@@ -313,6 +326,8 @@
        IF (FLAG_WRITE_CUBES .LT.0 .OR. FLAG_WRITE_CUBES .GT. 1) STOP 'FLAG_WRITE_CUBES must be 0 or 1'
       !  !$!$ FLAG_WRITE_PIECES must be 0 or 1
       !  IF (FLAG_WRITE_PIECES .LT.0 .OR. FLAG_WRITE_PIECES .GT. 1) STOP 'FLAG_WRITE_PIECES must be 0 or 1'
+
+       IF (FLAG_SURVEY .LT.0 .OR. FLAG_SURVEY .GT. 1) STOP 'FLAG_SURVEY must be 0 or 1'
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
        !$!$ Assume output written in dir "output_files"
@@ -385,8 +400,8 @@
        !!!!!!!!!!!!!!!!!!!!!!!!!
        !!!!!!!! CHECK MASK!!!!!!
        !!!!!!!!!!!!!!!!!!!!!!!!!
-       IF (FLAG_MASK .EQ. 1) THEN
-         WRITE(*,*) '************   MASK  *********************'
+       IF (FLAG_SURVEY .EQ. 1) THEN
+         WRITE(*,*) '************   SURVEY-MASK  *********************'
          OPEN(UNIT=16, FILE='input_data/mask.dat', access='stream')
          READ(16) NMASK
          WRITE(*,*) NMASK
@@ -399,7 +414,7 @@
          WRITE(*,*) MASKLOW, MASKUPPER, MASKSIDE
          READ(16) SMASK2
          CLOSE(16)
-         WRITE(*,*) 'FF of available volume', real(COUNT(SMASK2>0)) / real(NMASK**3)
+         WRITE(*,*) 'FF of available volume', REAL(COUNT(SMASK2>0)) / REAL(NMASK**3)
        ENDIF
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -855,7 +870,7 @@
           ALLOCATE(SMASK(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
           SMASK = 0
 
-          IF (FLAG_MASK .EQ. 1) THEN
+          IF (FLAG_SURVEY .EQ. 1) THEN
 
             !FROM SMASK2 (LOW RESOLUTION) TO VOID-FINDING RESOLUTION
             IF(NXX > NMASK) THEN
@@ -881,8 +896,12 @@
                            REAL(COUNT(SMASK>0)) / REAL(NXX**3) * 100
             WRITE(*,*)
 
+            !TO 0 and 1
+            WHERE (SMASK > 0) SMASK = 1
+
           ELSE !DO NOT APPLY MASK
             SMASK = 1
+
           ENDIF
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -960,32 +979,12 @@
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           IF (FLAG_DATA .EQ. 0) THEN
 
-            !---------------------------------------
-            !  LEVEL < 0 ---------------------
-            !---------------------------------------
-
-            IF(IR .LT. 0) THEN
-               !MASCLET, smooth l=0 grid 
-                  WRITE(*,*) 'Starting smoothing...'
-                  CALL SMOOTH(NXX,NYY,NZZ) 
-                  WRITE(*,*) 'End of smoothing'
-            ENDIF
-
-            !---------------------------------------
-            !  LEVEL = 0 -------------------
-            !---------------------------------------
-
-            IF(IR .EQ. 0) THEN
-               U1DMCO=U1DM
-               U1GCO=U1G
-               U1SCO=U1S
-               U2GCO=U2G
-               U3GCO=U3G
-               U4GCO=U4G
-            ENDIF
-
-            !INTERPOLATE PARTICLE VELOCITIES TO UNIFORM GRID
-            IF(FLAG_DIV .LE. 1) THEN
+            !!!!!!!!!!!!!!!!!!
+            !U1 is already density (1+delta)
+            !!!!!!!!!!!!!!!!!!!!!!!!
+            
+            !SPH / TSC INTERPOLATION OF DARK MATTER
+            IF(FLAG_DIV .LE. 1 .OR. FLAG_DENS .LE. 1) THEN
 
                WRITE(*,*)
                WRITE(*,*) 'From lagrangian to eulerian...'
@@ -998,12 +997,21 @@
                                                 RXPA,RYPA,RZPA,U2PA,U3PA,U4PA,U2DMCO,U3DMCO,U4DMCO)
                IF (FLAG_VEL_INTERP .EQ. 1) THEN
 
-                  CALL PPART_DENS(NPARTT,TREE,MASAP,PART_DENS)
+                  CALL PPART_DENS(KNEIGHBOURS,NPARTT,TREE,MASAP,PART_DENS)
 
-                  CALL VVEL_INTERP_SPH_VW(NXX,NYY,NZZ,NPARTT,TREE, &
+                  WRITE(*,*) MINVAL(PART_DENS), MAXVAL(PART_DENS)
+
+                  CALL VVEL_INTERP_SPH_VW(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE, &
                                  HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                                  U2DMCO,U3DMCO,U4DMCO)
 
+
+                  WRITE(*,*) MINVAL(U2DMCO), MAXVAL(U2DMCO)
+                  WRITE(*,*) MINVAL(U3DMCO), MAXVAL(U3DMCO)
+                  WRITE(*,*) MINVAL(U4DMCO), MAXVAL(U4DMCO)
+
+                  !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
+                  CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
 
                ENDIF
                call system_clock(t2,trate,tmax)
@@ -1012,13 +1020,111 @@
                WRITE(*,*) '///////////// Time (sec) spent during particle vel. interpolation (DM):', float(t2-t1)/1.e3
                WRITE(*,*)
 
+               WRITE(*,*)
+               IF (FLAG_DENS_INTERP .EQ. 0) WRITE(*,*) 'Density TSC KERNEL!'
+               IF (FLAG_DENS_INTERP .EQ. 1) WRITE(*,*) 'Density SPH KERNEL!'
+
+               call system_clock(t1,trate,tmax)
+               IF(FLAG_DENS_INTERP.EQ.0) CALL DENS_INTERP_TSC(NXX,NYY,NZZ, &
+                                          NPARTT,RXPA,RYPA,RZPA,MASAP,U1DMCO) !--> U1DMCO
+
+               IF(FLAG_DENS_INTERP.EQ.1) THEN
+
+                  !IF SPH VELOCITY RECONSTRUCTION IS NOT CALLED PRIOR TO DDENS
+                  !WE NEED TO CALL H_DISTANCE TO COMPUTE HPART
+                  !(Although this situation should be avoided)
+
+                  IF(FLAG_VEL_INTERP .EQ. 0) THEN
+                     WRITE(*,*) 'Calculating smoothing length...'
+                     CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+                     !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
+                     CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+                  ENDIF
+
+                  CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
+                                       RXPA,RYPA,RZPA,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
+                  
+                  WRITE(*,*) MINVAL(U1DMCO*UM), MAXVAL(U1DMCO*UM)
+
+               ENDIF
+               call system_clock(t2,trate,tmax)
+
+               WRITE(*,*) '...done'
+               WRITE(*,*) '///////////// Time (sec) spent during particle dens. interpolation (DM):', float(t2-t1)/1.e3
+               WRITE(*,*)
+
             ENDIF
+
+            !U1DMCO is mass until this point, we need density
+            U1DMCO = U1DMCO / (DXX*DYY*DZZ*RETE**3) !density in MASCLET units
+            U1DMCO = U1DMCO / ROTE !overdensity with respect to background density at z
+
+
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!
+            !GAS:
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            !---------------------------------------
+            !  LEVEL < 0 ---------------------
+            !---------------------------------------
+
+            IF(IR .LT. 0) THEN
+               !MASCLET, smooth l=0 grid 
+                  WRITE(*,*) 'Starting GAS smoothing...'
+                  CALL SMOOTH_2(NXX,NYY,NZZ) 
+                  WRITE(*,*) 'End of smoothing'
+            ENDIF
+
+            !---------------------------------------
+            !  LEVEL = 0 -------------------
+            !---------------------------------------
+
+            IF(IR .EQ. 0) THEN
+               U1GCO=U1G
+               U1SCO=U1S
+               U2GCO=U2G
+               U3GCO=U3G
+               U4GCO=U4G
+            ENDIF
+
+
+            !---------------------------------------
+            !  LEVEL > 0 -------------------
+            !---------------------------------------
+
+            !GAS DIVERGENCE AND VELOCITY CALCULATION
+            IF (IR .GE. 1) THEN
+
+               WRITE(*,*) 'AMR gas quantities...'
+
+               !Computes Divergence using AMR hierarchy
+               CALL DIVER_FINA_GAS(IR) !--> DIVR
+
+               !Density and gas divergence calculation performed with AMR structure
+               CALL VMESH(IR, NXX, NYY, NZZ, DXX, DYY, DZZ, RX1, RY1, RZ1, &
+                     NHYX, NHYY, NHYZ) !--> UR, UGR, USR, DIVR, FLAGAMR (allocated within the subr)
+
+               DO KZ=1, NZZ
+                  DO JY=1,NYY
+                     DO IX=1, NXX
+                        U1GCO(IX,JY,KZ)=UGR(IX,JY,KZ)
+                        U1SCO(IX,JY,KZ)=USR(IX,JY,KZ)
+                        DIVERGCO(IX,JY,KZ)=DIVR(IX,JY,KZ)
+                     ENDDO
+                  ENDDO
+               ENDDO
+
+               DEALLOCATE(UDMR, UGR, USR, DIVR)
+
+               WRITE(*,*) 'End of AMR gas quantities calculation'
+
+            ENDIF
+            !---------------------------------------
 
             WRITE(*,*)
             WRITE(*,*) 'Starting divergence calculation...'
 
             !---------------------------------------
-            !  LEVEL <= 0 -------------------
+            !  LEVEL <= 0 (on l>0 already computed with AMR hierarchy)
             !---------------------------------------
 
             IF (IR .LE. 0) THEN
@@ -1039,39 +1145,8 @@
                ENDIF
             ENDIF
 
-            !---------------------------------------
-            !  LEVEL > 0 -------------------
-            !---------------------------------------
-
-            IF (IR .GE. 1) THEN
-
-               !Computes Divergence using AMR hierarchy
-               CALL DIVER_FINA_GAS(IR) !--> DIVR
-
-               !Density and gas divergence calculation performed with AMR structure
-               CALL VMESH(IR, NXX, NYY, NZZ, DXX, DYY, DZZ, RX1, RY1, RZ1, &
-                     NHYX, NHYY, NHYZ) !--> UR, UGR, USR, DIVR, FLAGAMR (allocated within the subr)
-
-               DO KZ=1, NZZ
-                  DO JY=1,NYY
-                     DO IX=1, NXX
-                        U1DMCO(IX,JY,KZ)=UDMR(IX,JY,KZ)
-                        U1GCO(IX,JY,KZ)=UGR(IX,JY,KZ)
-                        U1SCO(IX,JY,KZ)=USR(IX,JY,KZ)
-                        DIVERGCO(IX,JY,KZ)=DIVR(IX,JY,KZ)
-                     ENDDO
-                  ENDDO
-               ENDDO
-
-               DEALLOCATE(UDMR, UGR, USR, DIVR)
-
-               !Particle divergence calculation performed in uniform grid
-               IF (FLAG_DIV .EQ. 1 .OR. FLAG_DIV .EQ. 0) THEN
-                  CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIOD)
-                  DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
-               ENDIF
-               
-            ENDIF
+            !U1DMCO, U1GCO, DIVERDMCO AND DIVERGCO CALCULATED
+         
 
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1104,17 +1179,28 @@
                                        RXPA,RYPA,RZPA,U2PA,U3PA,U4PA,U2DMCO,U3DMCO,U4DMCO)
             IF (FLAG_VEL_INTERP .EQ. 1) THEN
 
-               CALL PPART_DENS(NPARTT,TREE,MASAP,PART_DENS)
+               CALL PPART_DENS(KNEIGHBOURS,NPARTT,TREE,MASAP,PART_DENS)
 
                WRITE(*,*) MINVAL(PART_DENS), MAXVAL(PART_DENS)
 
-               CALL VVEL_INTERP_SPH_VW(NXX,NYY,NZZ,NPARTT,TREE, &
+               CALL VVEL_INTERP_SPH_VW(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE, &
                               HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                               U2DMCO,U3DMCO,U4DMCO)
 
-               WRITE(*,*) MINVAL(U2DMCO), MAXVAL(U2DMCO)
-               WRITE(*,*) MINVAL(U3DMCO), MAXVAL(U3DMCO)
-               WRITE(*,*) MINVAL(U4DMCO), MAXVAL(U4DMCO)
+               WRITE(*,*) MINVAL(U2DMCO,MASK=SMASK>0), MAXVAL(U2DMCO,MASK=SMASK>0)
+               WRITE(*,*) MINVAL(U3DMCO,MASK=SMASK>0), MAXVAL(U3DMCO,MASK=SMASK>0)
+               WRITE(*,*) MINVAL(U4DMCO,MASK=SMASK>0), MAXVAL(U4DMCO,MASK=SMASK>0)
+
+               !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
+               CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+
+            !!!!
+            OPEN(UNIT=33, FILE='vel_cube.dat', FORM='UNFORMATTED', STATUS='REPLACE', ACCESS = 'STREAM') 
+            WRITE(33) (((U2DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+            WRITE(33) (((U3DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+            WRITE(33) (((U4DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+            CLOSE(33)
+            !!!!
 
             ENDIF              
             call system_clock(t2,trate,tmax)
@@ -1142,12 +1228,16 @@
 
                IF(FLAG_VEL_INTERP .EQ. 0) THEN
                   WRITE(*,*) 'Calculating smoothing length...'
-                  CALL H_DISTANCE(NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+                  CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+                  !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
+                  CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
                ENDIF
 
-               CALL DDENS_INTERP_SPH_ATOMIC(NXX,NYY,NZZ,NPARTT, &
-                                          RXPA,RYPA,RZPA,HPART,MASAP,U1DMCO) !--> U1DMCO
-                                    
+               CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
+                                    RXPA,RYPA,RZPA,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
+               
+               WRITE(*,*) MINVAL(U1DMCO*UM,MASK=SMASK>0), MAXVAL(U1DMCO*UM,MASK=SMASK>0)
+
             ENDIF
             call system_clock(t2,trate,tmax)
 
@@ -1165,12 +1255,6 @@
 
             CALL DIVER_UNIFORM(NXX,NYY,NZZ,DXX,DYY,DZZ,U2DMCO,U3DMCO,U4DMCO,UBAS,FLAG_PERIOD)
             DIVERDMCO(1:NXX,1:NYY,1:NZZ) = UBAS
-
-            !---------------------------------------
-            ! Deallocate PARTICLE input variables
-            !---------------------------------------
-            DEALLOCATE(U2PA, U3PA, U4PA, RXPA, RYPA, RZPA, MASAP)
-            !---------------------------------------
 
           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
           ELSE !VELOCITIES NOT AVAILABLE
@@ -1198,12 +1282,15 @@
                !SINCE THIS TIME VVEL IS NOT CALLED PRIOR TO DDENS
                !WE NEED TO CALL H_DISTANCE TO COMPUTE HPART
                WRITE(*,*) 'Calculating smoothing length...'
-               CALL H_DISTANCE(NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+               CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+
+               !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
+               CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
 
                WRITE(*,*) 'Applying density SPH KERNEL!'
 
-               CALL DDENS_INTERP_SPH_ATOMIC(NXX,NYY,NZZ,NPARTT, &
-                                     RXPA,RYPA,RZPA,HPART,MASAP,U1DMCO) !--> U1DMCO
+               CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
+                                     RXPA,RYPA,RZPA,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
                                     
             ENDIF
             call system_clock(t2,trate,tmax)
@@ -1280,6 +1367,258 @@
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
+         !* Which density components to consider
+          ALLOCATE(U1CO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
+          IF(FLAG_DENS .EQ. 0) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO + U1GCO
+          IF(FLAG_DENS .EQ. 1) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO
+          IF(FLAG_DENS .EQ. 2) U1CO(1:NXX,1:NYY,1:NZZ) = U1GCO
+
+
+
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+         ! MEAN DENSITY block -> definition of delta = rho / <rho> - 1  
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+         !* Until here, density is in rho_background units -> to units of mean density
+          IF(FLAG_DATA .NE. 2) THEN
+
+            U1CO = U1CO*ROTE
+
+            !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            !Sythetic data (or reconstructed).
+            !    dens. contrast = rho/rhomean - 1
+            IF (FLAG_SURVEY .EQ. 0) THEN
+            !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               MEANDENS8 = 0.0D0
+               BASSINT8 = 0
+
+               !$OMP PARALLEL DO SHARED(U1CO,NXX,NYY,NZZ), &
+               !$OMP PRIVATE(IX,JY,KZ), REDUCTION(+:MEANDENS8,BASSINT8), &
+               !$OMP DEFAULT(NONE)
+               DO KZ=1,NZZ
+               DO JY=1,NYY
+               DO IX=1,NXX
+                  MEANDENS8 = MEANDENS8 + REAL(U1CO(IX,JY,KZ), KIND=8)
+                  BASSINT8 = BASSINT8 + 1
+               ENDDO
+               ENDDO
+               ENDDO
+               MEANDENS = MEANDENS8 / REAL(BASSINT8, KIND = 8)
+
+               U1CO = U1CO / MEANDENS !rho/rhomean
+
+               MEANDENS = MEANDENS * (UM / UL**3)
+
+               WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
+                           MEANDENS / (ROTE * (UM / UL**3))
+            !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            !survey: account for systematics and incompleteness 
+            !        using randoms and weights
+            !       dens. contrast = D/(alpha*R) - 1   (2PCF notation)
+            !       alpha = sum W_gal / sum W_rands (normalization)
+            ELSE IF (FLAG_SURVEY .EQ. 1) THEN
+            !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+               WRITE(*,*)
+               WRITE(*,*) 'SURVEY!'
+               WRITE(*,*) '   Loading random data...'
+
+               ! FLAG_DIV = -1
+
+               !------------------------------------------------------
+               !open rands.dat:
+               !-------------------------------------------------------
+               OPEN(UNIT=17, FILE='input_data/rands.dat', FORM='UNFORMATTED')
+               READ(17) NRAND
+               WRITE(*,*) '   NRAND:',NRAND
+               ALLOCATE(RANDX(NRAND),RANDY(NRAND),RANDZ(NRAND),MASSRAND(NRAND))
+               READ(17) RANDX
+               READ(17) RANDY
+               READ(17) RANDZ
+               READ(17) MASSRAND
+               !TO MASCLET UNITS
+               MASSRAND = MASSRAND/UM
+               WRITE(*,*) '   W range:', MINVAL(MASSRAND*UM), MAXVAL(MASSRAND*UM), &
+                                    SUM(REAL(MASSRAND*UM,8))/REAL(NRAND,8)
+               WRITE(*,*)
+               CLOSE(17)
+               !-------------------------------------------------------------------------
+
+               !allocate R
+               ALLOCATE(U1RAND(1:NXX,1:NYY,1:NZZ))
+                     
+               !$OMP PARALLEL DO SHARED(U1RAND,NXX,NYY,NZZ), &
+               !$OMP PRIVATE(IX,JY,KZ), DEFAULT(NONE)
+               DO KZ=1,NZZ
+               DO JY=1,NYY
+               DO IX=1,NXX
+                  U1RAND(IX,JY,KZ) = 0.
+               ENDDO
+               ENDDO
+               ENDDO
+               
+               !------------------------------------------------------
+               !INTERPOLATION OF RANDOMS COUNTS/WEIGHT TO GRID
+               !-------------------------------------------------------
+               !TSC
+               IF (FLAG_DENS_INTERP .EQ. 0) THEN
+                  WRITE(*,*) '   TSC random to grid...'
+                  call system_clock(t1,trate,tmax)
+                  CALL DENS_INTERP_TSC(NXX,NYY,NZZ,INT(NRAND,KIND=8),RANDX,RANDY,RANDZ,MASSRAND,U1RAND)
+                  call system_clock(t2,trate,tmax) 
+                  WRITE(*,*) '   zero count, frac.:', REAL(COUNT(SMASK>0)) - REAL(COUNT(U1RAND>0.)), &
+                                 (REAL(COUNT(SMASK>0)) - REAL(COUNT(U1RAND>0.)))/REAL(COUNT(U1RAND>0.))
+                  WRITE(*,*) '   ///////////// Time (sec) spent in TSC (randoms):', float(t2-t1)/1.e3
+                  WRITE(*,*)
+
+               !SPH
+               ELSE IF (FLAG_DENS_INTERP .EQ. 1) THEN
+
+                  WRITE(*,*) '   Calculating RANDOMS smoothing length...'
+                  ALLOCATE(HRAND(NRAND))
+                  HRAND = 0.
+
+                  ! !!!! SMOOTHER AND SLOWER OPTION: may contaminate voids with weights from outside
+                  ! !!!! h distance of randoms: average of neighbour particles/galaxies
+                  ! call system_clock(t1,trate,tmax)
+                  ! CALL H_RANDOMS(INT(NRAND,KIND=8),NPARTT,RANDX,RANDY,RANDZ,TREE,HPART,HRAND,4)
+                  ! RANDMEAN = SUM(REAL(HRAND,KIND=8))/REAL(NRAND,KIND=8)
+                  ! RANDSTD = SQRT(SUM((REAL(HRAND,KIND=8)-RANDMEAN)**2)/REAL(NRAND,KIND=8))
+                  ! HRANDMAX = RANDMEAN + RANDSTD
+                  ! WRITE(*,*) '   HRAND mean,std:', RANDMEAN, RANDSTD
+                  ! WRITE(*,*) '   HRAND min,max:', MINVAL(HRAND), MAXVAL(HRAND)
+                  ! WRITE(*,*) '   HRAND cut (mean+std):', HRANDMAX
+                  ! WHERE (HRAND .GT. HRANDMAX) HRAND = HRANDMAX
+                  ! !no need here to fill zeroes in HRAND since values are inherited from nonzero HPART
+                  ! call system_clock(t2,trate,tmax)
+                  ! WRITE(*,*) '   ///////////// Time (sec) spent calc. random smoothing length (h) ',float(t2-t1)/1.e3
+                  ! WRITE(*,*)
+               
+                  !!!! FASTER BUT NOISIER, more local-bound
+                  !!!! h distance obtained as with particle/galaxies
+                  !!!! weights are preserved in space
+                  ALLOCATE(TREEPOINTS(NRAND,3))
+                  TREEPOINTS(:,1) = RANDX(:)
+                  TREEPOINTS(:,2) = RANDY(:)
+                  TREEPOINTS(:,3) = RANDZ(:)
+#if periodic == 1
+                  call system_clock(t1,trate,tmax)
+                  TREERAND => build_kdtree(TREEPOINTS,LPERIODIC)
+                  call system_clock(t2,trate,tmax)
+#else
+                  call system_clock(t1,trate,tmax)
+                  TREERAND => build_kdtree(TREEPOINTS)
+                  call system_clock(t2,trate,tmax)
+#endif
+                  
+                  WRITE(*,*) '   ///////////// Time (sec) building RANDOM k-d tree ',float(t2-t1)/1.e3
+                  DEALLOCATE(TREEPOINTS)
+                  KNEIGHBOURS2 = MIN(8*KNEIGHBOURS, 256)
+                  Write(*,*) '   KNEIGHBOURS2:', KNEIGHBOURS2
+                  call system_clock(t1,trate,tmax)
+                  CALL H_DISTANCE(KNEIGHBOURS2, NXX,NYY,NZZ,INT(NRAND,KIND=8),TREERAND,SMASK,HRAND)
+                  CALL FILL_H_ZEROS(KNEIGHBOURS2,INT(NRAND,KIND=8),RANDX,RANDY,RANDZ,TREerand,HRAND)
+                  call system_clock(t2,trate,tmax)
+                  WRITE(*,*) '   ///////////// Time (sec) obtaining smoothing lengths ',float(t2-t1)/1.e3
+                  WRITE(*,*)
+                  call deallocate_kdtree(TREERAND)
+                  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+                  WRITE(*,*) '   SPH random to grid...'
+                  call system_clock(t1,trate,tmax)
+                  CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,INT(NRAND,KIND=8),RANDX,RANDY,RANDZ,HRAND,MASSRAND,SMASK,U1RAND)
+                  call system_clock(t2,trate,tmax) 
+
+                  WRITE(*,*) '   check:', MINVAL(U1RAND*UM, MASK=SMASK>0), MAXVAL(U1RAND*UM, MASK=SMASK>0), &
+                              SUM(REAL(U1RAND*UM,8), MASK=SMASK>0)/REAL(COUNT(SMASK>0),8)
+
+                  WRITE(*,*) '   ///////////// Time (sec) spent in SPH (randoms):', float(t2-t1)/1.e3
+                  WRITE(*,*)
+               ENDIF
+               !--------------------------------------------------------
+
+               WRITE(*,*) '   Defining dens.contrast (D/alpha*R)...'
+               !WEIGHTS D,R sum
+               DSUM = 0.0d0
+               RSUM = 0.0d0
+               !$OMP PARALLEL DO SHARED(U1CO,U1RAND,NXX,NYY,NZZ,SMASK), &
+               !$OMP PRIVATE(IX,JY,KZ), REDUCTION(+:DSUM,RSUM),DEFAULT(NONE)
+               DO KZ=1,NZZ
+               DO JY=1,NYY
+               DO IX=1,NXX
+                  IF (SMASK(IX,JY,KZ) .EQ. 0) CYCLE
+                  DSUM = DSUM + REAL(U1CO(IX,JY,KZ), KIND=8)
+                  RSUM = RSUM + REAL(U1RAND(IX,JY,KZ), KIND=8)
+               ENDDO
+               ENDDO
+               ENDDO
+               ALPHA = DSUM/RSUM
+               WRITE(*,*)
+
+               !!!! DENSITY RATIO (Mean = 1) !!!!!!
+               RATIOFLOOR = 1E-4  ! Must be > 0
+               RATIOMAX = 1000.0d0
+               !$OMP PARALLEL DO SHARED(U1CO,U1RAND,ALPHA,NXX,NYY,NZZ,RATIOFLOOR, &
+               !$OMP         RATIOMAX, SMASK), &
+               !$OMP PRIVATE(IX,JY,KZ,BASS8),DEFAULT(NONE)
+               DO KZ=1,NZZ
+               DO JY=1,NYY
+               DO IX=1,NXX
+                  IF (SMASK(IX,JY,KZ) .EQ. 0) CYCLE
+                  
+                  ! Guard against division by zero
+                  IF (U1RAND(IX,JY,KZ) > 0.0d0) THEN
+                     BASS8 = U1CO(IX,JY,KZ)/(ALPHA*U1RAND(IX,JY,KZ))
+                  ELSE
+                     BASS8 = RATIOFLOOR 
+                  ENDIF
+
+                  BASS8 = MAX(RATIOFLOOR,BASS8)
+                  BASS8 = MIN(RATIOMAX,BASS8)
+                  U1CO(IX,JY,KZ) = BASS8
+               ENDDO
+               ENDDO
+               ENDDO
+               !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+               MEANRATIO = SUM(REAL(U1CO,8), MASK=SMASK>0)/REAL(COUNT(SMASK>0),8)
+               WRITE(*,*) '   check (uncorrected mean):', MEANRATIO
+
+               ! FORCING MEAN RATIO = 1 (Requires Division)
+               WHERE (SMASK>0) U1CO = U1CO / MEANRATIO
+
+               !no need for rand anymore
+               DEALLOCATE(RANDX,RANDY,RANDZ,MASSRAND,U1RAND,HRAND)
+
+               MEANDENS = ROTE * (UM / UL**3)
+
+            !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            ENDIF
+            !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+          ELSE !GRID input overdensity: assumed in rho_background units
+            MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
+          ENDIF
+
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+         ! End MEAN DENSITY block 
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+         !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+
+ 
+         !------------------------------------------------------
+         ! Deallocate PARTICLE input variables
+         !------------------------------------------------------
+         IF (ALLOCATED(U2PA)) DEALLOCATE(U2PA)
+         IF (ALLOCATED(U3PA)) DEALLOCATE(U3PA)
+         IF (ALLOCATED(U4PA)) DEALLOCATE(U4PA)
+         IF (ALLOCATED(RXPA)) DEALLOCATE(RXPA)
+         IF (ALLOCATED(RYPA)) DEALLOCATE(RYPA)
+         IF (ALLOCATED(RZPA)) DEALLOCATE(RZPA)
+         IF (ALLOCATED(MASAP)) DEALLOCATE(MASAP)
+         !----------------------------------------------------
+
          !---------------------------------------
          ! Deallocate k-d tree variables
          !--------------------------------------- 
@@ -1290,27 +1629,6 @@
          ENDIF
          !---------------------------------------
 
-         !* Which density components to consider
-          ALLOCATE(U1CO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
-          IF(FLAG_DENS .EQ. 0) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO + U1GCO
-          IF(FLAG_DENS .EQ. 1) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO
-          IF(FLAG_DENS .EQ. 2) U1CO(1:NXX,1:NYY,1:NZZ) = U1GCO
-
-         !* Until here, density is in rho_background units -> to units of mean density
-          IF(FLAG_DATA .NE. 2) THEN
-            U1CO = U1CO*ROTE
-            MEANDENS = SUM(U1CO(1:NXX,1:NYY,1:NZZ), &
-                              MASK=(SMASK(1:NXX,1:NYY,1:NZZ) == 1)) / &
-                                       REAL(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1))
-            U1CO = U1CO / MEANDENS !rho/rhomean
-            MEANDENS = MEANDENS * (UM / UL**3)
-            WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
-                        MEANDENS / (RODO * (UM / UL**3))
-
-          ELSE !GRID input overdensity: assumed in rho_background units
-            MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
-          ENDIF
- 
          !* Which divergence components to consider
           ALLOCATE(DIVERCO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
           IF (FLAG_DIV .EQ. 2) DIVERCO(1:NXX,1:NYY,1:NZZ) = DIVERGCO
@@ -1373,9 +1691,9 @@
 
           WRITE(*,*)
           WRITE(*,*) 'Volume fraction allowed to belong to a void: ', REAL(COUNT(FLAG_SUB .GT. 0))/ &
-                                                                  REAL(COUNT(SMASK==1))
+                                                                  REAL(COUNT(SMASK == 1))
           WRITE(*,*) 'Potential void centres, fraction ', CONTA, REAL(CONTA)/ &
-                                                                  REAL(COUNT(SMASK==1))
+                                                                  REAL(COUNT(SMASK == 1))
           WRITE(*,*) 
           WRITE(*,*)
 
@@ -1660,7 +1978,7 @@
           WRITE(*,*) '----------------------------------------------'
           WRITE(*,*) 'Number of voids (R>Rmin, Ncell>Nmin):', NVOIDT
          !  WRITE(*,*) 'Num. voids above R = 10 cMpc:', COUNT(((3.*VOLNEW)/(4.*PI))**(1./3.) .GT. 10.)
-          WRITE(*,*) 'FF (Volume)', VOLT_CLEAN/(COUNT(SMASK > 0)*DXX**3)
+          WRITE(*,*) 'FF (Volume)', VOLT_CLEAN/(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1)*DXX**3)
           WRITE(*,*) '----------------------------------------------'
           WRITE(*,*) 'MIN(RAD), MAX(RAD) [cMpc]:', MINVAL(((3.*VOLNEW)/(4.*PI))**(1./3.), MASK=(UVOID == -1)), &
                                             MAXVAL(((3.*VOLNEW)/(4.*PI))**(1./3.), MASK=(UVOID == -1))
@@ -1707,8 +2025,8 @@
 
           !Binary 3D maps 
           !(STREAM -> no headers or structure, open with Numpy)
-          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', status='UNKNOWN', ACCESS = 'STREAM') 
-
+          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', STATUS='REPLACE', ACCESS = 'STREAM') 
+            
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !3D arrays file
@@ -1899,7 +2217,6 @@
          DEALLOCATE(U1G,U1S,U1DM)
          DEALLOCATE(U2G,U3G,U4G)
          DEALLOCATE(U11G,U12G,U13G,U14G,U11S,U11DM)
-         DEALLOCATE(U2PA,U3PA,U4PA,RXPA,RYPA,RZPA,MASAP)
        ENDIF
 
 !*////////////////////////////////////

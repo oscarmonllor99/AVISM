@@ -373,7 +373,7 @@ contains
     maxind = maxloc(points(:, axis), dim = 1)
 
     !slide the hyperplane to the closest point 
-    if (minx > midpoint) then
+    if (minx >= midpoint) then
         midpoint = minx
 
         !swaping mindind to the first position
