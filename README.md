@@ -323,11 +323,11 @@ Below, we provide three tables (one for each type of information given in `voids
 | Void property  | Description |
 | ------------- | ------------- |
 | ID | Void ID, corresponding to the ID of the biggest cube belonging to it |
-| $X$, $Y$, $Z$| Void centre coordinates, defined as the centre of the biggest cube belonging to it |
+| $X$, $Y$, $Z$| Void centre coordinates, defined as the maximum divergence point|
 | $X_G$, $Y_G$, $Z_G$| Void volume-weighed (geometrical) centre |
 | Vol | Void total volume (in $\text{Mpc}^3$) |
 | $R$ | Void effective radius (in $\text{Mpc}$)|
-| $\overline{\rho}$ | Mean density (in matter background density units) inside the void |
+| $\overline{\rho}$ | Mean density (in mean volume density units) inside the void |
 | $\epsilon$ | Void ellipticity |
 | IP | Void inverse porosity |
 | ID($\ell-1$) | If applicable, ID of parent void at level $\ell-1$ |
