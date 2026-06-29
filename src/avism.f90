@@ -40,6 +40,7 @@
        !
        REAL*4 :: MEANDENS, MEANRATIO
        REAL*8 :: MEANDENS8
+       REAL*4 :: FILLFRAC, FILLFRAC2
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
        ! GRID
@@ -1187,9 +1188,12 @@
                               HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                               U2DMCO,U3DMCO,U4DMCO)
 
-               WRITE(*,*) MINVAL(U2DMCO,MASK=SMASK>0), MAXVAL(U2DMCO,MASK=SMASK>0)
-               WRITE(*,*) MINVAL(U3DMCO,MASK=SMASK>0), MAXVAL(U3DMCO,MASK=SMASK>0)
-               WRITE(*,*) MINVAL(U4DMCO,MASK=SMASK>0), MAXVAL(U4DMCO,MASK=SMASK>0)
+               WRITE(*,*) MINVAL(U2DMCO,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0), &
+                          MAXVAL(U2DMCO,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0)
+               WRITE(*,*) MINVAL(U3DMCO,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0), &
+                          MAXVAL(U3DMCO,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0)
+               WRITE(*,*) MINVAL(U4DMCO,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0), &
+                          MAXVAL(U4DMCO,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0)
 
                !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
                CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
@@ -1236,7 +1240,8 @@
                CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
                                     RXPA,RYPA,RZPA,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
                
-               WRITE(*,*) MINVAL(U1DMCO*UM,MASK=SMASK>0), MAXVAL(U1DMCO*UM,MASK=SMASK>0)
+               WRITE(*,*) MINVAL(U1DMCO*UM,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0), &
+                           MAXVAL(U1DMCO*UM,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0)
 
             ENDIF
             call system_clock(t2,trate,tmax)
@@ -1587,17 +1592,20 @@
                ! FORCING MEAN RATIO = 1 (Requires Division)
                WHERE (SMASK>0) U1CO = U1CO / MEANRATIO
 
+               ! SINCE RANDOM density (background) depends on position,
+               ! for surveys it does not make sense to provide a global mean density:
+               MEANDENS = 1.
+
                !no need for rand anymore
                DEALLOCATE(RANDX,RANDY,RANDZ,MASSRAND,U1RAND,HRAND)
-
-               MEANDENS = ROTE * (UM / UL**3)
-
             !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             ENDIF
             !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
           ELSE !GRID input overdensity: assumed in rho_background units
+
             MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
+
           ENDIF
 
          !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -1606,28 +1614,6 @@
          !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
          !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 
- 
-         !------------------------------------------------------
-         ! Deallocate PARTICLE input variables
-         !------------------------------------------------------
-         IF (ALLOCATED(U2PA)) DEALLOCATE(U2PA)
-         IF (ALLOCATED(U3PA)) DEALLOCATE(U3PA)
-         IF (ALLOCATED(U4PA)) DEALLOCATE(U4PA)
-         IF (ALLOCATED(RXPA)) DEALLOCATE(RXPA)
-         IF (ALLOCATED(RYPA)) DEALLOCATE(RYPA)
-         IF (ALLOCATED(RZPA)) DEALLOCATE(RZPA)
-         IF (ALLOCATED(MASAP)) DEALLOCATE(MASAP)
-         !----------------------------------------------------
-
-         !---------------------------------------
-         ! Deallocate k-d tree variables
-         !--------------------------------------- 
-         IF (FLAG_KD .EQ. 1) THEN
-            CALL deallocate_kdtree(TREE)
-            DEALLOCATE(HPART)
-            DEALLOCATE(PART_DENS)
-         ENDIF
-         !---------------------------------------
 
          !* Which divergence components to consider
           ALLOCATE(DIVERCO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
@@ -1779,14 +1765,14 @@
           call system_clock(t1,trate,tmax)
           CALL MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZC,NVOID2)
           call system_clock(t2,trate,tmax)
-
+          FILLFRAC = REAL(COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0)) &
+                                     / REAL(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1))
           WRITE(*,*) '///////////// Time (sec) spent during merging:', float(t2-t1)/1.e3
           WRITE(*,*)
 
           WRITE(*,*) 'Num. Cells in voids', COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0)
           WRITE(*,*) 'Number of voids after merging:', NVOID2
-          WRITE(*,*) 'FF (Volume)', REAL(COUNT(MARCA(1:NXX,1:NYY,1:NZZ) .GT. 0)) &
-                                     / REAL(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1))
+          WRITE(*,*) 'FF (Volume)', FILLFRAC
           WRITE(*,*) '************************************************'
           WRITE(*,*)
 
@@ -1972,13 +1958,15 @@
           !NUMBER OF VOIDS AFTER POST-PROCESSING
           NVOIDT=COUNT(UVOID .EQ. -1)
 
+          FILLFRAC2 = VOLT_CLEAN/(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1)*DXX**3)
+
           WRITE(*,*)
           WRITE(*,*)
           WRITE(*,*) '\\\\\ AFTER POST-PROCESSING \\\\\'
           WRITE(*,*) '----------------------------------------------'
           WRITE(*,*) 'Number of voids (R>Rmin, Ncell>Nmin):', NVOIDT
          !  WRITE(*,*) 'Num. voids above R = 10 cMpc:', COUNT(((3.*VOLNEW)/(4.*PI))**(1./3.) .GT. 10.)
-          WRITE(*,*) 'FF (Volume)', VOLT_CLEAN/(COUNT(SMASK(1:NXX,1:NYY,1:NZZ) == 1)*DXX**3)
+          WRITE(*,*) 'FF (Volume)', FILLFRAC2
           WRITE(*,*) '----------------------------------------------'
           WRITE(*,*) 'MIN(RAD), MAX(RAD) [cMpc]:', MINVAL(((3.*VOLNEW)/(4.*PI))**(1./3.), MASK=(UVOID == -1)), &
                                             MAXVAL(((3.*VOLNEW)/(4.*PI))**(1./3.), MASK=(UVOID == -1))
@@ -2044,7 +2032,7 @@
           !!!! CATALOGUE file
 
           !^^^^^^^^^^^^^^HEADER^^^^^^^^^^^^^^^^
-          WRITE(10,*) IR, NVOID, NVOIDT, NVOIDP, VOLT_CLEAN/(LADO0**3), MEANDENS
+          WRITE(10,*) IR, NVOID, NVOIDT, NVOIDP, FILLFRAC2, MEANDENS
 
 
           !Optional: cubes file, written at the same time that catalogue file
@@ -2218,6 +2206,29 @@
          DEALLOCATE(U2G,U3G,U4G)
          DEALLOCATE(U11G,U12G,U13G,U14G,U11S,U11DM)
        ENDIF
+
+
+      !------------------------------------------------------
+      ! Deallocate PARTICLE input variables
+      !------------------------------------------------------
+      IF (ALLOCATED(U2PA)) DEALLOCATE(U2PA)
+      IF (ALLOCATED(U3PA)) DEALLOCATE(U3PA)
+      IF (ALLOCATED(U4PA)) DEALLOCATE(U4PA)
+      IF (ALLOCATED(RXPA)) DEALLOCATE(RXPA)
+      IF (ALLOCATED(RYPA)) DEALLOCATE(RYPA)
+      IF (ALLOCATED(RZPA)) DEALLOCATE(RZPA)
+      IF (ALLOCATED(MASAP)) DEALLOCATE(MASAP)
+      !----------------------------------------------------
+
+      !---------------------------------------
+      ! Deallocate k-d tree variables
+      !--------------------------------------- 
+      IF (FLAG_KD .EQ. 1) THEN
+         CALL deallocate_kdtree(TREE)
+         DEALLOCATE(HPART)
+         DEALLOCATE(PART_DENS)
+      ENDIF
+      !---------------------------------------
 
 !*////////////////////////////////////
 !*////////////////////////////////////
