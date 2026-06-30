@@ -64,7 +64,7 @@ Our code needs few dependencies: a Fortran compiler and OpenMP for shared-memory
 * [OpenMP](https://www.openmp.org/)
 * (optional) [HDF5](https://www.hdfgroup.org/solutions/hdf5/)
 
-HDF5 is only used for some kind of input data, such as reading directly from Arepo outputs.
+HDF5 is only used for some kind of input data, such as reading directly from Gadget-like outputs.
 
 ### Make
 
@@ -88,7 +88,7 @@ Both options will create the `avism.x` executable inside the root directory. By 
 
 **The `Makefile` can be customised if the user needs another `Fortran` compiler (e.g., `ifort`) or other flag configuration.**
 
-Furthermore, two more compilation options are available: `HDF5` (defaults to 0) and `PERIODIC` (defaults to 0). The first specifies if the [HDF5](https://www.hdfgroup.org/) library is needed (`HDF5=1`) to read the input data. At the time of writing, the code only needs HDF5 if an Arepo output is used as input for the void finder. The second tells the code to use periodic boundary conditions (`PERIODIC=1`) if the input data requires it (e.g., entire cosmological simulation boxes).
+Furthermore, two more compilation options are available: `HDF5` (defaults to 0) and `PERIODIC` (defaults to 0). The first specifies if the [HDF5](https://www.hdfgroup.org/) library is needed (`HDF5=1`) to read the input data. At the time of writing, the code only needs HDF5 if an Gadget-like output is used as input for the void finder. The second tells the code to use periodic boundary conditions (`PERIODIC=1`) if the input data requires it (e.g., entire cosmological simulation boxes).
 
 This would be a compilation example with periodic boundary conditions and debugging:
 
@@ -146,11 +146,22 @@ As of today, the code allows for 4 different types of input:
    * `float32(1:N): Z` (Mpc)
    * `float32(1:N): M` ($M_{\odot}$)
 
-   When this type of input is selected, the code expects a `bin_file_partXXXXX` binary file. The user must specify an `iteration` or `snapshot` number `XXXXX`, as this allow the code to be run on several iterations without stopping. If this feature is not needed (for example analysing a galaxy survey), one can simply provide **AVISM** with a bin_file_part00001 file and tell the code to find voids just in iteration `1`. Moreover, `bin_file_partXXXXX` files must be inside the `path_to_AVISM/input_data` directory.
+   When this type of input is selected, the code expects a `bin_file_partXXXXX` binary file. The user must specify an `iteration` or `snapshot` number `XXXXX`, as this allows the code to be run on several iterations without stopping. If this feature is not needed (for example analysing a galaxy survey), one can simply provide **AVISM** with a bin_file_part00001 file and tell the code to find voids just in iteration `1`. Moreover, `bin_file_partXXXXX` files must be inside the `path_to_AVISM/input_data` directory.
 
    **All particle positions `x,y,z` must lie in the `(-L/2, L/2)` range, with `L` the side of the data cube. This is especially important if `PERIODIC=1`, as periodicity will be assumed in the `(-L/2, L/2)` range for all three cartesian directions.**
 
-   The python script `tools/uchuu2avism.py` serves as an example to properly prepare a particle input from a simulation output (in this case, a halo catalogue from [Mini-Uchuu](https://www.skiesanduniverses.org/Simulations/Uchuu/). Similarly, `tools/galaxy_survey.py` shows how to prepare a simple galaxy survey input (2MRS [John P. Huchra et al 2012 ApJS 199 26](https://iopscience.iop.org/article/10.1088/0067-0049/199/2/26) in that case), although we strongly recommend preprocessing galaxy surveys with external tools such as [CORAS](https://github.com/rlilow/CORAS), [Neural Networks](https://github.com/rlilow/2MRS-NeuralNet), or utilising constrained simulations of the Local Universe (e.g., see [Manticore-Local](https://arxiv.org/abs/2505.10682)) to obtain full reconstructions/descriptions of the density and velocity fields (non-linear in the last two examples), thus allowing to fully leverage the void finder capabilities. 
+   The python script `tools/uchuu2avism.py` serves as an example to properly prepare a particle input from a simulation output (in this case, a halo catalogue from [Mini-Uchuu](https://www.skiesanduniverses.org/Simulations/Uchuu/). Similarly, `tools/galaxy_survey.py` shows how to prepare a simple galaxy survey input (2MRS [John P. Huchra et al 2012 ApJS 199 26](https://iopscience.iop.org/article/10.1088/0067-0049/199/2/26) in that case), although we strongly recommend preprocessing galaxy surveys with external tools such as [CORAS](https://github.com/rlilow/CORAS), [Neural Networks](https://github.com/rlilow/2MRS-NeuralNet), or utilising constrained simulations of the Local Universe (e.g., see [Manticore-Local](https://arxiv.org/abs/2505.10682)) to obtain full reconstructions/descriptions of the density and velocity fields (non-linear in the last two examples), thus allowing to fully leverage the void finder capabilities.
+
+   Finally, it must be pointed out that this kind of input allows for the identification of voids within galaxy surveys that haven't been previously processed by a grid reconstruction tool. If this is the case, one must specify `SURVEY=1` in the `Type of data to process` section of the configuration file. For this scenario, the code expects the `rands.dat` and `mask.dat` files inside the `input_data` folder. Inside the `tools` folder, we provide a Fortran code to create the `mask.dat` file from randoms. The randoms file `rands.dat` file should be structured as follows:
+   
+   ```
+   int32: nrand
+   float32(1:NX,1:NY,1:NZ): xrand
+   float32(1:NX,1:NY,1:NZ): yrand
+   float32(1:NX,1:NY,1:NZ): zrand
+   float32(1:NX,1:NY,1:NZ): Wrand
+   ```
+   with nrand the number of randoms, (xrand,yrand,zrand) their 3D position and Wrand the random weights, if applicable.
 
 4. **Grid input:** `Option 2`
    
@@ -170,11 +181,11 @@ As of today, the code allows for 4 different types of input:
 
    The python scripts `tools/linear2M++_2_avism.py` and `tools/manticore2avism.py` serve as examples to properly prepare a grid input from a full linear reconstruction ([2M++_linear](https://cosmicflows.iap.fr/)) and a non-linear constrained simulation ([Manticore-Local](https://arxiv.org/abs/2505.10682))), respectively, of the Local Universe consisting of a uniform grid with the density and velocity fields defined.
 
-5. **Arepo input:** `Option 3`
+5. **Gadget-like input:** `Option 3`
 
-   A reader for [Arepo](https://arepo-code.org/) cosmological simulations (particularly the [IllustrisTNG](https://www.tng-project.org/) suite) is provided. This way, the user can give as input to the void finder all gas or dark matter particles from a snapshot. Care must be taken, however, as the [HDF5](https://www.hdfgroup.org/) library has to be properly installed and linked inside the Makefile. If this input is chosen, input files should be inside `path_to_AVISM/simu_arepo`.
+   A reader for [Arepo](https://arepo-code.org/) cosmological simulations (particularly the [IllustrisTNG](https://www.tng-project.org/) suite) and [FLAMINGO](https://dataweb.cosma.dur.ac.uk:8443/flamingo/index.html) is provided. This way, the user can give as input to the void finder all gas or dark matter particles from a snapshot. Care must be taken, however, as the [HDF5](https://www.hdfgroup.org/) library has to be properly installed and linked inside the Makefile. If this input is chosen, input files should be inside `path_to_AVISM/simu_arepo` or `path_to_AVISM/simu_flamingo`, depending on the chosen option.
 
-   This option must only be used for directly reading data from Arepo's output and, hence, uses raw simulation data, such as dark matter or gas particles, as input. This kind of usage is very different than utilising the TNG readers inside `tools`, which are just examples to handle [IllustrisTNG](https://www.tng-project.org/) halo catalogues to prepare a *generic* particle-like (`Option 2`) input.
+   This option must only be used for directly reading data from Gadget-like outputs and, hence, uses raw simulation data, such as dark matter or gas particles, as input. This kind of usage is very different from utilising the TNG readers inside `tools`, which are just examples for handling halo catalogues to prepare a *generic* particle-like (`Option 2`) input.
 
    **In this case, no treatment on particle positions is required, as AVISM internally transforms them to the (-L/2, L/2) range.**
 
@@ -230,15 +241,19 @@ In this block, the physical thresholds for performing the void-finding algorithm
 *******************************************************************************
 *       Type of data to process                                   
 *******************************************************************************
-type of data -> 0:MASCLET, 1:BinPart, 2:BinGrid, 3:AREPO(snap) --------------->
+type of data -> 0:MASCLET, 1:BinPart, 2:BinGrid, 3:GADGET-like --------------->
+1
+IF MASCLET or Grid data: NX, NY, NZ (INPUT coarse grid size) ----------------->
+128,128,128
+IF GADGET-like: files per snapshot, PartType (1:gas, 2:dm), DM mass (Msun) --->
+16,2,5.38E10
+GADGET-like reader: 0:IllustrisTNG, 1:FLAMINGO ------------------------------->
+1
+IF SURVEY -> 0:yes, 1:no ----------------------------------------------------->
 0
-IF MASCLET or Grid data: NX, NY, NZ (INPUT grid size) ------------------------>
-256,256,256
-IF AREPO data: files per snapshot, PartType (1:gas, 2:dm), DM mass (Msun) ---->
-100,2,470000000.0
 ```
 
-Here, the user must specify the input data format and, in the case of using `Option 0` or `2`, the input grid size should be supplied, with the previous $N_x, N_y, N_z$ values in `General parameters block` being ignored. On the other hand, if 'Option 3' is chosen (that is, Arepo data), the user must specify the number of files per snapshot, the particle type (`PartType`) used as matter tracer and the dark matter particle mass if `PartType=2`.
+Here, the user must specify the input data format as described previously. In the case of using `Option 0` or `2`, the input grid size should be supplied, with the previous $N_x, N_y, N_z$ values in `General parameters block` being ignored. On the other hand, if 'Option 3' is chosen (that is, Gadget-like data), the user must specify the number of files per snapshot, the particle type (`PartType`) used as matter tracer and the dark matter particle mass if `PartType=2`. If the input option is `3` one must choose among the different Gadget-like input options. Finally, if the input is of type `1`, it must be specified whether the data comes from a galaxy survey or not.
 
 ```
 *******************************************************************************
