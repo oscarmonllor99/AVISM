@@ -65,7 +65,7 @@ IMPLICIT NONE
 !input variables
 INTEGER:: LEV, NVOID1
 REAL*4:: DDX, DDY, DDZ, RX1, RY1, RZ1
-INTEGER, ALLOCATABLE :: MARCA_AUX(:,:,:)
+INTEGER*1, ALLOCATABLE :: MARCA_AUX(:,:,:)
 REAL*4, DIMENSION(NVOID1):: REQP
 INTEGER*1 :: SMASK(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2)
 !local variables
@@ -76,7 +76,7 @@ REAL*4 DDENS
 REAL*4 DDENS2
 REAL*4, ALLOCATABLE:: DDD(:), DDD2(:)
 REAL*4 A,B,C
-REAL*4 :: DIVERCO2(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2)
+REAL*4, ALLOCATABLE :: DIVERCO2(:,:,:)
 INTEGER, ALLOCATABLE:: DDDX(:), DDDY(:), DDDZ(:), &
     DDDX2(:), DDDY2(:), DDDZ2(:), INDICE(:), INDICE2(:)
 INTEGER:: FLAG_DIV_P, FLAG_NEXT_GRAD_P, NVOID_MAX_P, NSEC_P
@@ -103,6 +103,7 @@ NSEC=1
 
 !max divergence
 NXYZ=0
+ALLOCATE(DIVERCO2(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
 DIVERCO2=DIVERCO*REAL(FLAGV)
 
 !new DIVERCO2 is =DIVERCO if DIVERCO>0 and 0 elsewhere
@@ -180,6 +181,9 @@ IF (II.NE.NXYZ) THEN
  STOP
 END IF
 
+!!!!! No longer needed
+DEALLOCATE(DIVERCO2)
+
 !!!  ORDERING DIVERGENCE of candidate cells: 
 !!!                from largest to smallest: We want centers in cells of max diver
 CALL INDEXX(NXYZ,DDD(1:NXYZ),INDICE2(1:NXYZ)) !sort from smallest to largest
@@ -252,13 +256,12 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
 !$OMP END DO
 !$OMP END PARALLEL
 
-
+   
 !$OMP PARALLEL SHARED(LOW1,LOW2,DIVERCO,U1CO,FLAG_DIV_P,FLAG_NEXT_GRAD_P,DIV_THRE,&
 !$OMP FLAGX1_GRID,FLAGX2_GRID,FLAGY1_GRID,FLAGY2_GRID,FLAGZ1_GRID,FLAGZ2_GRID,SMASK, &
 !$OMP FLAG1_GRID,MARCAP2,REQP,RMIN_SUB,FLAG_SUB,DDX,DDY,DDZ,GRAD_THRE,DENS_THRE2,NSEC_P), &
 !$OMP     PRIVATE(II,IX,JY,KZ,REQ0,INDV,DDENS,DDENS2), DEFAULT(NONE)
-!$OMP DO REDUCTION(+:FLAGX1_GRID,FLAGX2_GRID,FLAGY1_GRID,FLAGY2_GRID, &
-!$OMP                FLAGZ1_GRID,FLAGZ2_GRID,FLAG1_GRID)
+!$OMP DO
    DO KZ=LOW1,LOW2
       DO JY=LOW1,LOW2
          DO IX=LOW1,LOW2
@@ -280,22 +283,25 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(IX .GE. LOW2-NSEC_P) FLAGX2_GRID(IX,JY,KZ)=1
             IF(FLAGX2_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = IX+1
-               IF(SMASK(II,JY,KZ).EQ.0) CYCLE
-               !+X GRADIENT
-               IF(II .EQ. LOW2) THEN
-                  !only check divergence and density
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX2_GRID(IX,JY,KZ)=1
-                  IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX2_GRID(IX,JY,KZ)=1
+               IF(SMASK(II,JY,KZ).EQ.0) THEN
+                  FLAGX2_GRID(IX,JY,KZ)=1
                ELSE
-                  DDENS = (U1CO(II+1,JY,KZ)-U1CO(II-1,JY,KZ))/(2.D0*DDX)
-                  IF(DDENS .GE. GRAD_THRE) FLAGX2_GRID(IX,JY,KZ)=1
-                  !check gradient in the next cell
-                  IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGX2_GRID(IX,JY,KZ)==1 .AND. II .LT. LOW2-1) THEN
-                     DDENS2=(U1CO(II+2,JY,KZ)-U1CO(II,JY,KZ))/(2.D0*DDX)
-                     IF(DDENS2 .LT. GRAD_THRE) FLAGX2_GRID(IX,JY,KZ)=0
+                  !+X GRADIENT
+                  IF(II .EQ. LOW2) THEN
+                     !only check divergence and density
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX2_GRID(IX,JY,KZ)=1
+                     IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX2_GRID(IX,JY,KZ)=1
+                  ELSE
+                     DDENS = (U1CO(II+1,JY,KZ)-U1CO(II-1,JY,KZ))/(2.D0*DDX)
+                     IF(DDENS .GE. GRAD_THRE) FLAGX2_GRID(IX,JY,KZ)=1
+                     !check gradient in the next cell
+                     IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGX2_GRID(IX,JY,KZ)==1 .AND. II .LT. LOW2-1) THEN
+                        DDENS2=(U1CO(II+2,JY,KZ)-U1CO(II,JY,KZ))/(2.D0*DDX)
+                        IF(DDENS2 .LT. GRAD_THRE) FLAGX2_GRID(IX,JY,KZ)=0
+                     ENDIF
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX2_GRID(IX,JY,KZ)=1
+                     IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX2_GRID(IX,JY,KZ)=1
                   ENDIF
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX2_GRID(IX,JY,KZ)=1
-                  IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX2_GRID(IX,JY,KZ)=1
                ENDIF
             ENDIF
             !!!!!!!!!!!!
@@ -305,22 +311,25 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(IX .LE. LOW1+NSEC_P) FLAGX1_GRID(IX,JY,KZ)=1
             IF(FLAGX1_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = IX-1
-               IF(SMASK(II,JY,KZ).EQ.0) CYCLE
-               !+X GRADIENT
-               IF(II .EQ. LOW1) THEN
-                  !only check divergence and density
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX1_GRID(IX,JY,KZ)=1
-                  IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX1_GRID(IX,JY,KZ)=1
+               IF(SMASK(II,JY,KZ).EQ.0) THEN
+                  FLAGX1_GRID(IX,JY,KZ)=1 
                ELSE
-                  DDENS = (U1CO(II-1,JY,KZ)-U1CO(II+1,JY,KZ))/(2.D0*DDX)
-                  IF(DDENS .GE. GRAD_THRE) FLAGX1_GRID(IX,JY,KZ)=1
-                  !check gradient in the next cell
-                  IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGX1_GRID(IX,JY,KZ)==1 .AND. II .GT. LOW1+1) THEN 
-                     DDENS2=(U1CO(II-2,JY,KZ)-U1CO(II,JY,KZ))/(2.D0*DDX)
-                     IF(DDENS2 .LT. GRAD_THRE) FLAGX1_GRID(IX,JY,KZ)=0
+                  !+X GRADIENT
+                  IF(II .EQ. LOW1) THEN
+                     !only check divergence and density
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX1_GRID(IX,JY,KZ)=1
+                     IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX1_GRID(IX,JY,KZ)=1
+                  ELSE
+                     DDENS = (U1CO(II-1,JY,KZ)-U1CO(II+1,JY,KZ))/(2.D0*DDX)
+                     IF(DDENS .GE. GRAD_THRE) FLAGX1_GRID(IX,JY,KZ)=1
+                     !check gradient in the next cell
+                     IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGX1_GRID(IX,JY,KZ)==1 .AND. II .GT. LOW1+1) THEN 
+                        DDENS2=(U1CO(II-2,JY,KZ)-U1CO(II,JY,KZ))/(2.D0*DDX)
+                        IF(DDENS2 .LT. GRAD_THRE) FLAGX1_GRID(IX,JY,KZ)=0
+                     ENDIF
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX1_GRID(IX,JY,KZ)=1
+                     IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX1_GRID(IX,JY,KZ)=1
                   ENDIF
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(II,JY,KZ) .LT. DIV_THRE) FLAGX1_GRID(IX,JY,KZ)=1
-                  IF(U1CO(II,JY,KZ) .GE. DENS_THRE2+1.) FLAGX1_GRID(IX,JY,KZ)=1
                ENDIF
             ENDIF
             !!!!!!!!!!!!
@@ -330,22 +339,25 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(JY .GE. LOW2-NSEC_P) FLAGY2_GRID(IX,JY,KZ)=1
             IF(FLAGY2_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = JY+1
-               IF(SMASK(IX,II,KZ).EQ.0) CYCLE
-               !+Y GRADIENT
-               IF(II .EQ. LOW2) THEN
-                  !only check divergence and density
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY2_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY2_GRID(IX,JY,KZ)=1
+               IF(SMASK(IX,II,KZ).EQ.0) THEN
+                  FLAGY2_GRID(IX,JY,KZ)=1
                ELSE
-                  DDENS = (U1CO(IX,II+1,KZ)-U1CO(IX,II-1,KZ))/(2.D0*DDY)
-                  IF(DDENS .GE. GRAD_THRE) FLAGY2_GRID(IX,JY,KZ)=1
-                  !check gradient in the next cell
-                  IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGY2_GRID(IX,JY,KZ)==1 .AND. II .LT. LOW2-1) THEN 
-                     DDENS2=(U1CO(IX,II+2,KZ)-U1CO(IX,II,KZ))/(2.D0*DDY)
-                     IF(DDENS2 .LT. GRAD_THRE) FLAGY2_GRID(IX,JY,KZ)=0
+                  !+Y GRADIENT
+                  IF(II .EQ. LOW2) THEN
+                     !only check divergence and density
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY2_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY2_GRID(IX,JY,KZ)=1
+                  ELSE
+                     DDENS = (U1CO(IX,II+1,KZ)-U1CO(IX,II-1,KZ))/(2.D0*DDY)
+                     IF(DDENS .GE. GRAD_THRE) FLAGY2_GRID(IX,JY,KZ)=1
+                     !check gradient in the next cell
+                     IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGY2_GRID(IX,JY,KZ)==1 .AND. II .LT. LOW2-1) THEN 
+                        DDENS2=(U1CO(IX,II+2,KZ)-U1CO(IX,II,KZ))/(2.D0*DDY)
+                        IF(DDENS2 .LT. GRAD_THRE) FLAGY2_GRID(IX,JY,KZ)=0
+                     ENDIF
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY2_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY2_GRID(IX,JY,KZ)=1
                   ENDIF
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY2_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY2_GRID(IX,JY,KZ)=1
                ENDIF
             ENDIF
             !!!!!!!!!!!!
@@ -355,22 +367,25 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(JY .LE. LOW1+NSEC_P) FLAGY1_GRID(IX,JY,KZ)=1
             IF(FLAGY1_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = JY-1
-               IF(SMASK(IX,II,KZ).EQ.0) CYCLE
-               !+Y GRADIENT
-               IF(II .EQ. LOW1) THEN
-                  !only check divergence and density
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY1_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY1_GRID(IX,JY,KZ)=1
+               IF(SMASK(IX,II,KZ).EQ.0) THEN
+                  FLAGY1_GRID(IX,JY,KZ)=1
                ELSE
-                  DDENS = (U1CO(IX,II-1,KZ)-U1CO(IX,II+1,KZ))/(2.D0*DDY)
-                  IF(DDENS .GE. GRAD_THRE) FLAGY1_GRID(IX,JY,KZ)=1
-                  !check gradient in the next cell
-                  IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGY1_GRID(IX,JY,KZ)==1 .AND. II .GT. LOW1+1) THEN 
-                     DDENS2=(U1CO(IX,II-2,KZ)-U1CO(IX,II,KZ))/(2.D0*DDY)
-                     IF(DDENS2 .LT. GRAD_THRE) FLAGY1_GRID(IX,JY,KZ)=0
+                  !+Y GRADIENT
+                  IF(II .EQ. LOW1) THEN
+                     !only check divergence and density
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY1_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY1_GRID(IX,JY,KZ)=1
+                  ELSE
+                     DDENS = (U1CO(IX,II-1,KZ)-U1CO(IX,II+1,KZ))/(2.D0*DDY)
+                     IF(DDENS .GE. GRAD_THRE) FLAGY1_GRID(IX,JY,KZ)=1
+                     !check gradient in the next cell
+                     IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGY1_GRID(IX,JY,KZ)==1 .AND. II .GT. LOW1+1) THEN 
+                        DDENS2=(U1CO(IX,II-2,KZ)-U1CO(IX,II,KZ))/(2.D0*DDY)
+                        IF(DDENS2 .LT. GRAD_THRE) FLAGY1_GRID(IX,JY,KZ)=0
+                     ENDIF
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY1_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY1_GRID(IX,JY,KZ)=1
                   ENDIF
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,II,KZ) .LT. DIV_THRE) FLAGY1_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,II,KZ) .GE. DENS_THRE2+1.) FLAGY1_GRID(IX,JY,KZ)=1
                ENDIF
             ENDIF
             !!!!!!!!!!!!
@@ -380,22 +395,25 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(KZ .GE. LOW2-NSEC_P) FLAGZ2_GRID(IX,JY,KZ)=1
             IF(FLAGZ2_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = KZ+1
-               IF(SMASK(IX,JY,II).EQ.0) CYCLE
-               !+Z GRADIENT
-               IF(II .EQ. LOW2) THEN
-                  !only check divergence and density
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ2_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ2_GRID(IX,JY,KZ)=1
+               IF(SMASK(IX,JY,II).EQ.0) THEN
+                  FLAGZ2_GRID(IX,JY,KZ)=1
                ELSE
-                  DDENS = (U1CO(IX,JY,II+1)-U1CO(IX,JY,II-1))/(2.D0*DDZ)
-                  IF(DDENS .GE. GRAD_THRE) FLAGZ2_GRID(IX,JY,KZ)=1
-                  !check gradient in the next cell
-                  IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGZ2_GRID(IX,JY,KZ)==1 .AND. II .LT. LOW2-1) THEN 
-                     DDENS2=(U1CO(IX,JY,II+2)-U1CO(IX,JY,II))/(2.D0*DDZ)
-                     IF(DDENS2 .LT. GRAD_THRE) FLAGZ2_GRID(IX,JY,KZ)=0
+                  !+Z GRADIENT
+                  IF(II .EQ. LOW2) THEN
+                     !only check divergence and density
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ2_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ2_GRID(IX,JY,KZ)=1
+                  ELSE
+                     DDENS = (U1CO(IX,JY,II+1)-U1CO(IX,JY,II-1))/(2.D0*DDZ)
+                     IF(DDENS .GE. GRAD_THRE) FLAGZ2_GRID(IX,JY,KZ)=1
+                     !check gradient in the next cell
+                     IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGZ2_GRID(IX,JY,KZ)==1 .AND. II .LT. LOW2-1) THEN 
+                        DDENS2=(U1CO(IX,JY,II+2)-U1CO(IX,JY,II))/(2.D0*DDZ)
+                        IF(DDENS2 .LT. GRAD_THRE) FLAGZ2_GRID(IX,JY,KZ)=0
+                     ENDIF
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ2_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ2_GRID(IX,JY,KZ)=1
                   ENDIF
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ2_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ2_GRID(IX,JY,KZ)=1
                ENDIF
             ENDIF
             !!!!!!!!!!!!
@@ -405,22 +423,25 @@ ALLOCATE(FLAG1_GRID(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
             IF(KZ .LE. LOW1+NSEC_P) FLAGZ1_GRID(IX,JY,KZ)=1
             IF(FLAGZ1_GRID(IX,JY,KZ) .EQ. 0) THEN
                II = KZ-1
-               IF(SMASK(IX,JY,II).EQ.0) CYCLE
-               !+Z GRADIENT
-               IF(II .EQ. LOW1) THEN
-                  !only check divergence and density
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ1_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ1_GRID(IX,JY,KZ)=1
+               IF(SMASK(IX,JY,II).EQ.0) THEN
+                  FLAGZ1_GRID(IX,JY,KZ)=1
                ELSE
-                  DDENS = (U1CO(IX,JY,II-1)-U1CO(IX,JY,II+1))/(2.D0*DDZ)
-                  IF(DDENS .GE. GRAD_THRE) FLAGZ1_GRID(IX,JY,KZ)=1
-                  !check gradient in the next cell
-                  IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGZ1_GRID(IX,JY,KZ)==1 .AND. II .GT. LOW1+1) THEN 
-                     DDENS2=(U1CO(IX,JY,II-2)-U1CO(IX,JY,II))/(2.D0*DDZ)
-                     IF(DDENS2 .LT. GRAD_THRE) FLAGZ1_GRID(IX,JY,KZ)=0
+                  !+Z GRADIENT
+                  IF(II .EQ. LOW1) THEN
+                     !only check divergence and density
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ1_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ1_GRID(IX,JY,KZ)=1
+                  ELSE
+                     DDENS = (U1CO(IX,JY,II-1)-U1CO(IX,JY,II+1))/(2.D0*DDZ)
+                     IF(DDENS .GE. GRAD_THRE) FLAGZ1_GRID(IX,JY,KZ)=1
+                     !check gradient in the next cell
+                     IF(FLAG_NEXT_GRAD_P==1 .AND. FLAGZ1_GRID(IX,JY,KZ)==1 .AND. II .GT. LOW1+1) THEN 
+                        DDENS2=(U1CO(IX,JY,II-2)-U1CO(IX,JY,II))/(2.D0*DDZ)
+                        IF(DDENS2 .LT. GRAD_THRE) FLAGZ1_GRID(IX,JY,KZ)=0
+                     ENDIF
+                     IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ1_GRID(IX,JY,KZ)=1
+                     IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ1_GRID(IX,JY,KZ)=1
                   ENDIF
-                  IF(FLAG_DIV_P==1 .AND. DIVERCO(IX,JY,II) .LT. DIV_THRE) FLAGZ1_GRID(IX,JY,KZ)=1
-                  IF(U1CO(IX,JY,II) .GE. DENS_THRE2+1.) FLAGZ1_GRID(IX,JY,KZ)=1
                ENDIF
             ENDIF
             !!!!!!!!!!!!
@@ -465,6 +486,7 @@ DO L1=1, NXYZ
 
    NVOID=NVOID+1
    IF(NVOID>NVOID_MAX) THEN
+      WRITE(*,*) NVOID, NVOID_MAX
       WRITE(*,*) '       NVOID > NVOID_MAX!! Increase NVOID_MAX '
       STOP
    ENDIF
@@ -693,7 +715,7 @@ DO L1=1, NXYZ
       VOL(NVOID)=VV
       MARCA_AUX(INICIOX(NVOID):FINALX(NVOID), &
                 INICIOY(NVOID):FINALY(NVOID), &
-                INICIOZ(NVOID):FINALZ(NVOID))=NVOID   
+                INICIOZ(NVOID):FINALZ(NVOID))=1  
    ELSE
       NVOID=NVOID-1
    ENDIF
@@ -705,7 +727,8 @@ ENDDO !loop on center cells: L =1, NXYZ !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ 
 !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ 
 !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-
+DEALLOCATE(MARCA_AUX)
+DEALLOCATE(DDD, DDDX, DDDY, DDDZ, INDICE)
 DEALLOCATE(FLAGX1_GRID, FLAGX2_GRID, FLAGY1_GRID, FLAGY2_GRID, FLAGZ1_GRID, FLAGZ2_GRID)
 DEALLOCATE(FLAG1_GRID)
 !***************************************************************************
@@ -1363,8 +1386,226 @@ END SUBROUTINE SIMPLE_CONNECTION_FAST
 ! !***************************************************************************
 
 
+! !***************************************************************************
+! SUBROUTINE VOID_PERIODIC(NVOID,INDICE,UVOID,GXC,GYC,GZC,VOLNEW, &
+!                         NX,NY,NZ,DX,DY,DZ,LOW1,LOW2)
+! !Checks voids having cells outside the box and finds the periodic images
+! !***************************************************************************
+!    USE COMMONDATA, ONLY: LADO0, LADO0PLUS, MARCA, PI, RADX, RADY, RADZ
+!    IMPLICIT NONE
+!    !input variables
+!    INTEGER :: NVOID, NX, NY, NZ, LOW1, LOW2, PARENT
+!    INTEGER, DIMENSION(NVOID) :: INDICE, UVOID, INDICE2
+!    REAL, DIMENSION(NVOID) :: GXC, GYC, GZC, VOLNEW
+!    REAL :: DX, DY, DZ
+!    !local
+!    INTEGER :: COUNTER, COUNTER2
+!    INTEGER :: IND,I,J,IND2,IX,JY,KZ,FLAG,IXX,JYY,KZZ
+!    INTEGER :: IGCX,IGCY,IGCZ
+!    REAL :: XC1,YC1,ZC1
+!    REAL :: INTERSEC
+!    ! REAL :: TOL, RR
+!    REAL, ALLOCATABLE :: LCX(:),LCY(:),LCZ(:)
+!    INTEGER, ALLOCATABLE :: LINDEXING(:)
+!    INTEGER :: NLOCAL
+
+
+!    !FIND MAJOR VOIDS INSIDE OR INTERSECTING THE BOX
+!    INDICE2 = 0
+!    NLOCAL = 0
+!    DO I=1,NVOID
+!       IND = INDICE(I)
+!       IF (UVOID(IND) .GE. 0) CYCLE !ONLY MAIN VOIDS
+
+!       !CHECK VOID HAS COMPONENTS INSIDE THE BOX
+!       FLAG = 0
+!       check_bounds: DO KZ=1,NZ
+!          DO JY=1,NY
+!             DO IX=1,NX
+!                IF(MARCA(IX,JY,KZ) .EQ. IND) THEN
+!                   FLAG = 1
+!                   EXIT check_bounds
+!                ENDIF
+!             ENDDO
+!          ENDDO
+!       ENDDO check_bounds
+      
+!       !DELETE (COMPLETELY) OUTSIDE VOIDS
+!       IF(FLAG.EQ.0) THEN
+!          VOLNEW(IND) = 0.
+!          UVOID(IND) = 0
+!          WHERE(UVOID .EQ. IND)
+!             UVOID = 0
+!          END WHERE
+!          WHERE (MARCA .EQ. IND)
+!             MARCA = 0
+!          END WHERE
+
+!       !SAVE VOIDS INSIDE OR INTERSECTING THE BOX
+!       ELSE
+!          NLOCAL = NLOCAL + 1
+!          INDICE2(NLOCAL) = IND
+!       ENDIF
+!    ENDDO
+
+
+!    ALLOCATE(LCX(NLOCAL),LCY(NLOCAL),LCZ(NLOCAL),LINDEXING(NLOCAL))
+!    DO I=1,NLOCAL
+!       IND = INDICE2(I)
+!       LINDEXING(I) = IND
+!       LCX(I) = GXC(IND)
+!       LCY(I) = GYC(IND)
+!       LCZ(I) = GZC(IND)
+!    ENDDO
+
+
+!    DO J=1,NLOCAL
+!       IND = LINDEXING(J)
+
+!       !already merged
+!       IF (UVOID(IND) .GE. 0) CYCLE
+
+!       XC1 = LCX(J)
+!       YC1 = LCY(J)
+!       ZC1 = LCZ(J)
+
+!       !CHECK WHAT IS THE PERIODICITY OF THE VOID
+!       IX = 0
+!       IF(XC1 .LT. -LADO0/2) IX = +1
+!       IF(XC1 .GT. LADO0/2) IX = -1
+!       JY = 0
+!       IF(YC1 .LT. -LADO0/2) JY = +1
+!       IF(YC1 .GT. LADO0/2) JY = -1
+!       KZ = 0
+!       IF(ZC1 .LT. -LADO0/2) KZ = +1
+!       IF(ZC1 .GT. LADO0/2) KZ = -1
+
+!       !Cycle inner voids
+!       IF(IX.EQ.0 .AND. JY.EQ.0 .AND. KZ.EQ.0) CYCLE
+
+!       !For outer voids, calculate the intersection of their cells with the
+!       !corresponding (bigger) inner void
+      
+!       !1-Identify where the center lies
+!       IGCX = INT((GXC(IND)-RADX(1))/DX) + 1
+!       IGCY = INT((GYC(IND)-RADY(1))/DY) + 1
+!       IGCZ = INT((GZC(IND)-RADZ(1))/DZ) + 1
+
+!       !2-Inner void containing the periodically shifted center
+!       IND2 = MARCA(IGCX+IX*NX,IGCY+JY*NY,IGCZ+KZ*NZ)
+      
+!       !This should not happen, but just in case
+!       IF (IND2 .EQ. 0) CYCLE
+
+!       !Loop over all cells belonging to IND, shifting them periodically
+!       !and check the fraction of IND belonging to IND2
+!       COUNTER = 0
+!       COUNTER2 = 0
+!       DO KZZ=LOW1,LOW2
+!          DO JYY=LOW1,LOW2
+!             DO IXX=LOW1,LOW2
+!                IF(MARCA(IXX,JYY,KZZ) .EQ. IND) THEN
+!                   !Bounds check
+!                   IF(IXX+IX*NX.GE.LOW1 .AND. IXX+IX*NX.LE.LOW2 .AND. &
+!                      JYY+JY*NY.GE.LOW1 .AND. JYY+JY*NY.LE.LOW2 .AND. &
+!                      KZZ+KZ*NZ.GE.LOW1 .AND. KZZ+KZ*NZ.LE.LOW2) THEN
+!                      !Check if cell belongs to IND2
+!                      COUNTER2 = COUNTER2 + 1
+!                      IF(MARCA(IXX+IX*NX,JYY+JY*NY,KZZ+KZ*NZ) .EQ. IND2) THEN
+!                         COUNTER = COUNTER + 1
+!                      ENDIF
+!                   ENDIF
+!                ENDIF
+!             ENDDO
+!          ENDDO
+!       ENDDO
+
+!       !Fraction of IND belonging to IND2
+!       IF (COUNTER2 .EQ. 0) THEN
+!          INTERSEC = 0
+!       ELSE
+!          INTERSEC = REAL(COUNTER)/REAL(COUNTER2)
+!       ENDIF
+
+!       !If the fraction is larger than X, then is the same void
+!       IF(INTERSEC .GT. 0.4) CALL CHANGE_BELONG(IND2,IND)
+
+!    ENDDO
+
+!    ! UPDATE MARCA in a single pass
+!    DO KZ=LOW1,LOW2
+!       DO JY=LOW1,LOW2
+!          DO IX=LOW1,LOW2
+!             IND = MARCA(IX,JY,KZ)
+!             IF (IND .GT. 0) THEN
+!                IF (UVOID(IND) .GT. 0) THEN
+!                   MARCA(IX,JY,KZ) = UVOID(IND)
+!                ENDIF
+!             ENDIF
+!          ENDDO
+!       ENDDO
+!    ENDDO
+
+!    ! !CLEAN VOIDS OUTSIDE THAT HAVEN'T BEEN MERGED
+!    ! !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!    ! DO J=1,NLOCAL
+!    !    IND = LINDEXING(J)
+
+!    !    IF (UVOID(IND) .GE. 0) CYCLE
+
+!    !    XC1 = LCX(J)
+!    !    YC1 = LCY(J)
+!    !    ZC1 = LCZ(J)
+
+!    !    FLAG = 0
+!    !    !Check if void lies outside the box
+!    !    IF(XC1 .LT. -LADO0/2. .OR. XC1 .GT. LADO0/2.) FLAG = 1
+!    !    IF(YC1 .LT. -LADO0/2. .OR. YC1 .GT. LADO0/2.) FLAG = 1
+!    !    IF(ZC1 .LT. -LADO0/2. .OR. ZC1 .GT. LADO0/2.) FLAG = 1
+!    !    IF(FLAG.EQ.0) CYCLE
+
+!    !    !CLEAN
+!    !    UVOID(IND) = 0
+!    !    VOLNEW(IND) = 0.
+!    !    WHERE (MARCA .EQ. IND)
+!    !       MARCA = 0
+!    !    END WHERE
+
+!    !    WHERE(UVOID .EQ. IND)
+!    !       UVOID = 0
+!    !    END WHERE
+
+!    ! ENDDO
+!    ! !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+!    DEALLOCATE(LCX,LCY,LCZ,LINDEXING)
+
+!    CONTAINS
+
+!       SUBROUTINE CHANGE_BELONG(I,II)
+!          IMPLICIT NONE
+!          INTEGER :: I,II
+
+!          UVOID(II) = I
+!          WHERE (UVOID .EQ. II)
+!             UVOID = I
+!          END WHERE
+
+!          !!!!! Will be updated in a single pass at the end
+!          ! WHERE (MARCA .EQ. II)
+!          !    MARCA = I
+!          ! END WHERE
+
+!          VOLNEW(II) = 0.
+
+!       END SUBROUTINE CHANGE_BELONG
+
+! !***************************************************************************
+! END SUBROUTINE VOID_PERIODIC
+! !***************************************************************************
+
 !***************************************************************************
-SUBROUTINE VOID_PERIODIC(NVOID,INDICE,UVOID,GXC,GYC,GZC,VOLNEW, &
+SUBROUTINE VOID_PERIODIC_2(NVOID,INDICE,UVOID,GXC,GYC,GZC,VOLNEW, &
                         NX,NY,NZ,DX,DY,DZ,LOW1,LOW2)
 !Checks voids having cells outside the box and finds the periodic images
 !***************************************************************************
@@ -1375,175 +1616,165 @@ SUBROUTINE VOID_PERIODIC(NVOID,INDICE,UVOID,GXC,GYC,GZC,VOLNEW, &
    INTEGER, DIMENSION(NVOID) :: INDICE, UVOID, INDICE2
    REAL, DIMENSION(NVOID) :: GXC, GYC, GZC, VOLNEW
    REAL :: DX, DY, DZ
+   
    !local
-   INTEGER :: COUNTER, COUNTER2
-   INTEGER :: IND,I,J,IND2,IX,JY,KZ,FLAG,IXX,JYY,KZZ
-   INTEGER :: IGCX,IGCY,IGCZ
-   REAL :: XC1,YC1,ZC1
-   REAL :: INTERSEC
-   ! REAL :: TOL, RR
-   REAL, ALLOCATABLE :: LCX(:),LCY(:),LCZ(:)
-   INTEGER, ALLOCATABLE :: LINDEXING(:)
-   INTEGER :: NLOCAL
+   INTEGER :: I, J, IND, IND2, IX, JY, KZ, IXX, JYY, KZZ
+   INTEGER :: IGCX, IGCY, IGCZ, NLOCAL
+   REAL :: XC1, YC1, ZC1, INTERSEC
 
+   ! Arrays to eliminate the nested 3D loops
+   LOGICAL, ALLOCATABLE :: IS_INSIDE(:)
+   INTEGER, ALLOCATABLE :: SHIFT_X(:), SHIFT_Y(:), SHIFT_Z(:)
+   INTEGER, ALLOCATABLE :: TARGET_IND2(:), MATCH_COUNT(:), TOTAL_COUNT(:)
 
-   !FIND MAJOR VOIDS INSIDE OR INTERSECTING THE BOX
-   INDICE2 = 0
+   ALLOCATE(IS_INSIDE(NVOID))
+   IS_INSIDE = .FALSE.
+
+   ! voids inside or intersecting the box
+   DO KZ=1,NZ
+      DO JY=1,NY
+         DO IX=1,NX
+            IND = MARCA(IX,JY,KZ)
+            IF (IND > 0) IS_INSIDE(IND) = .TRUE.
+         ENDDO
+      ENDDO
+   ENDDO
+
+   ! DELETE (COMPLETELY) OUTSIDE VOIDS
    NLOCAL = 0
    DO I=1,NVOID
       IND = INDICE(I)
-      IF (UVOID(IND) .GE. 0) CYCLE !ONLY MAIN VOIDS
-
-      NLOCAL = NLOCAL + 1
-      INDICE2(NLOCAL) = IND
-
-      !CHECK VOID HAS COMPONENTS INSIDE THE BOX
-      FLAG = 0
-      DO KZ=1,NZ
-         DO JY=1,NY
-            DO IX=1,NX
-               IF(MARCA(IX,JY,KZ) .EQ. IND) THEN
-                  FLAG = 1
-                  EXIT
-               ENDIF
-            ENDDO
-         ENDDO
-      ENDDO
+      IF (UVOID(IND) .GE. 0) CYCLE ! ONLY MAIN VOIDS
       
-      !DELETE (COMPLETELY) OUTSIDE VOIDS
-      IF(FLAG.EQ.0) THEN
+      IF (.NOT. IS_INSIDE(IND)) THEN
          VOLNEW(IND) = 0.
          UVOID(IND) = 0
          WHERE(UVOID .EQ. IND)
             UVOID = 0
          END WHERE
-         WHERE (MARCA .EQ. IND)
-            MARCA = 0
-         END WHERE
+         !MARCA will be cleaned up in the final single pass
 
-      !SAVE VOIDS INSIDE OR INTERSECTING THE BOX
+      ! SAVE VOIDS INSIDE OR INTERSECTING THE BOX
       ELSE
          NLOCAL = NLOCAL + 1
          INDICE2(NLOCAL) = IND
       ENDIF
    ENDDO
 
+   ! cross-match arrays for outer voids
+   ALLOCATE(SHIFT_X(NVOID), SHIFT_Y(NVOID), SHIFT_Z(NVOID))
+   ALLOCATE(TARGET_IND2(NVOID), MATCH_COUNT(NVOID), TOTAL_COUNT(NVOID))
+   
+   SHIFT_X = 0
+   SHIFT_Y = 0 
+   SHIFT_Z = 0
+   TARGET_IND2 = 0 
+   MATCH_COUNT = 0 
+   TOTAL_COUNT = 0
 
-
-   ALLOCATE(LCX(NLOCAL),LCY(NLOCAL),LCZ(NLOCAL),LINDEXING(NLOCAL))
-   DO I=1,NLOCAL
-      IND = INDICE2(I)
-      LINDEXING(I) = IND
-      LCX(I) = GXC(IND)
-      LCY(I) = GYC(IND)
-      LCZ(I) = GZC(IND)
-   ENDDO
-
-
-
+   ! CALCULATE INNER VOID (IND2) THAT IS THE PERIODIC IMAGE OF OUTER VOID (IND)
    DO J=1,NLOCAL
-      IND = LINDEXING(J)
+      IND = INDICE2(J)
+      IF (UVOID(IND) .GE. 0) CYCLE
 
-      XC1 = LCX(J)
-      YC1 = LCY(J)
-      ZC1 = LCZ(J)
+      XC1 = GXC(IND)
+      YC1 = GYC(IND)
+      ZC1 = GZC(IND)
 
-      !CHECK WHAT IS THE PERIODICITY OF THE VOID
       IX = 0
-      IF(XC1 .LT. -LADO0/2) IX = +1
-      IF(XC1 .GT. LADO0/2) IX = -1
       JY = 0
-      IF(YC1 .LT. -LADO0/2) JY = +1
-      IF(YC1 .GT. LADO0/2) JY = -1
       KZ = 0
-      IF(ZC1 .LT. -LADO0/2) KZ = +1
-      IF(ZC1 .GT. LADO0/2) KZ = -1
+      IF(XC1 .LT. -LADO0/2.) IX = +1
+      IF(XC1 .GT. LADO0/2.)  IX = -1
+      IF(YC1 .LT. -LADO0/2.) JY = +1
+      IF(YC1 .GT. LADO0/2.)  JY = -1
+      IF(ZC1 .LT. -LADO0/2.) KZ = +1
+      IF(ZC1 .GT. LADO0/2.)  KZ = -1
 
       !Cycle inner voids
-      IF(IX.EQ.0 .AND. JY.EQ.0 .AND. KZ.EQ.0) CYCLE
+      IF(IX .EQ. 0 .AND. JY .EQ. 0 .AND. KZ .EQ. 0) CYCLE
 
-      !For outer voids, calculate the intersection of their cells with the
-      !corresponding (bigger) inner void
-      
       !1-Identify where the center lies
       IGCX = INT((GXC(IND)-RADX(1))/DX) + 1
       IGCY = INT((GYC(IND)-RADY(1))/DY) + 1
       IGCZ = INT((GZC(IND)-RADZ(1))/DZ) + 1
 
       !2-Inner void containing the periodically shifted center
-      IND2 = MARCA(IGCX+IX*NX,IGCY+JY*NY,IGCZ+KZ*NZ)
-      !This should not happen, but just in case
-      IF (IND2 .EQ. 0) CYCLE
+      IND2 = MARCA(IGCX+IX*NX, IGCY+JY*NY, IGCZ+KZ*NZ)
+      
+      IF (IND2 .GT. 0) THEN
+         SHIFT_X(IND) = IX
+         SHIFT_Y(IND) = JY
+         SHIFT_Z(IND) = KZ
+         TARGET_IND2(IND) = IND2
+      ENDIF
+   ENDDO
 
-      !Loop over all cells belonging to IND, shifting them periodically
-      !and check the fraction of IND belonging to IND2
-      COUNTER = 0
-      COUNTER2 = 0
-      DO KZZ=LOW1,LOW2
-         DO JYY=LOW1,LOW2
-            DO IXX=LOW1,LOW2
-               IF(MARCA(IXX,JYY,KZZ) .EQ. IND) THEN
-                  !Bounds check
-                  IF(IXX+IX*NX.GE.LOW1 .AND. IXX+IX*NX.LE.LOW2 .AND. &
-                     JYY+JY*NY.GE.LOW1 .AND. JYY+JY*NY.LE.LOW2 .AND. &
-                     KZZ+KZ*NZ.GE.LOW1 .AND. KZZ+KZ*NZ.LE.LOW2) THEN
+   !sweep MARCA once to tackle all cross-matches at once
+   DO KZZ=LOW1,LOW2
+      DO JYY=LOW1,LOW2
+         DO IXX=LOW1,LOW2
+            IND = MARCA(IXX,JYY,KZZ)
+            IF (IND .GT. 0) THEN
+
+               IF (.NOT. IS_INSIDE(IND)) CYCLE
+
+               IND2 = TARGET_IND2(IND)
+               
+               !Calculate intersection of outer void (IND) with inner void (IND2)
+               IF (IND2 .GT. 0) THEN
+                  IX = SHIFT_X(IND)
+                  JY = SHIFT_Y(IND)
+                  KZ = SHIFT_Z(IND)
+
+                  ! Bounds check
+                  IF(IXX+IX*NX .GE. LOW1 .AND. IXX+IX*NX .LE. LOW2 .AND. &
+                     JYY+JY*NY .GE. LOW1 .AND. JYY+JY*NY .LE. LOW2 .AND. &
+                     KZZ+KZ*NZ .GE. LOW1 .AND. KZZ+KZ*NZ .LE. LOW2) THEN
+                     TOTAL_COUNT(IND) = TOTAL_COUNT(IND) + 1
                      !Check if cell belongs to IND2
-                     COUNTER2 = COUNTER2 + 1
-                     IF(MARCA(IXX+IX*NX,JYY+JY*NY,KZZ+KZ*NZ) .EQ. IND2) THEN
-                        COUNTER = COUNTER + 1
+                     IF(MARCA(IXX+IX*NX, JYY+JY*NY, KZZ+KZ*NZ) .EQ. IND2) THEN
+                        MATCH_COUNT(IND) = MATCH_COUNT(IND) + 1
                      ENDIF
                   ENDIF
                ENDIF
-            ENDDO
+            ENDIF
          ENDDO
       ENDDO
-
-      !Fraction of IND belonging to IND2
-      IF (COUNTER2 .EQ. 0) THEN
-         INTERSEC = 0
-      ELSE
-         INTERSEC = REAL(COUNTER)/REAL(COUNTER2)
-      ENDIF
-
-      !If the fraction is larger than X, then is the same void
-      IF(INTERSEC .GT. 0.4) CALL CHANGE_BELONG(IND2,IND)
-
    ENDDO
 
+   !Apply the intersection criteria
+   DO J=1,NLOCAL
+      IND = INDICE2(J)
+      IND2 = TARGET_IND2(IND)
+      
+      IF (IND2 .GT. 0 .AND. TOTAL_COUNT(IND) .GT. 0) THEN
+         INTERSEC = REAL(MATCH_COUNT(IND)) / REAL(TOTAL_COUNT(IND))
+         IF(INTERSEC .GT. 0.4) THEN
+            !If the fraction is larger than X, then is the same void
+            CALL CHANGE_BELONG(IND2, IND)
+         ENDIF
+      ENDIF
+   ENDDO
 
-   ! !CLEAN VOIDS OUTSIDE THAT HAVEN'T BEEN MERGED
-   ! !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   ! DO J=1,NLOCAL
-   !    IND = LINDEXING(J)
+   !Final MARCA update to eliminate outer voids and merge periodic images
+   DO KZ=LOW1,LOW2
+      DO JY=LOW1,LOW2
+         DO IX=LOW1,LOW2
+            IND = MARCA(IX,JY,KZ)
+            IF (IND .GT. 0) THEN
+               IF (UVOID(IND) .EQ. 0) THEN
+                  MARCA(IX,JY,KZ) = 0
+               ELSE IF (UVOID(IND) .GT. 0) THEN
+                  MARCA(IX,JY,KZ) = UVOID(IND)
+               ENDIF
+            ENDIF
+         ENDDO
+      ENDDO
+   ENDDO
 
-   !    IF (UVOID(IND) .GE. 0) CYCLE
-
-   !    XC1 = LCX(J)
-   !    YC1 = LCY(J)
-   !    ZC1 = LCZ(J)
-
-   !    FLAG = 0
-   !    !Check if void lies outside the box
-   !    IF(XC1 .LT. -LADO0/2. .OR. XC1 .GT. LADO0/2.) FLAG = 1
-   !    IF(YC1 .LT. -LADO0/2. .OR. YC1 .GT. LADO0/2.) FLAG = 1
-   !    IF(ZC1 .LT. -LADO0/2. .OR. ZC1 .GT. LADO0/2.) FLAG = 1
-   !    IF(FLAG.EQ.0) CYCLE
-
-   !    !CLEAN
-   !    UVOID(IND) = 0
-   !    VOLNEW(IND) = 0.
-   !    WHERE (MARCA .EQ. IND)
-   !       MARCA = 0
-   !    END WHERE
-
-   !    WHERE(UVOID .EQ. IND)
-   !       UVOID = 0
-   !    END WHERE
-
-   ! ENDDO
-   ! !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-   DEALLOCATE(LCX,LCY,LCZ,LINDEXING)
+   DEALLOCATE(IS_INSIDE, SHIFT_X, SHIFT_Y, SHIFT_Z)
+   DEALLOCATE(TARGET_IND2, MATCH_COUNT, TOTAL_COUNT)
 
    CONTAINS
 
@@ -1556,16 +1787,12 @@ SUBROUTINE VOID_PERIODIC(NVOID,INDICE,UVOID,GXC,GYC,GZC,VOLNEW, &
             UVOID = I
          END WHERE
 
-         WHERE (MARCA .EQ. II)
-            MARCA = I
-         END WHERE
-
          VOLNEW(II) = 0.
 
       END SUBROUTINE CHANGE_BELONG
 
 !***************************************************************************
-END SUBROUTINE VOID_PERIODIC
+END SUBROUTINE VOID_PERIODIC_2
 !***************************************************************************
 
 
