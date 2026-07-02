@@ -38,7 +38,7 @@
        REAL*4 :: T,ZETA
        REAL*4 :: RETE,ROTE,HTE
        !
-       REAL*4 :: MEANDENS, MEANRATIO
+       REAL*4 :: MEANDENS, MEANRATIO, CELL_MASS
        REAL*8 :: MEANDENS8
        REAL*4 :: FILLFRAC, FILLFRAC2
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -71,7 +71,7 @@
        INTEGER :: NVOID, NVOIDP, NVOIDT, NVOID2
        INTEGER :: I, IV, IND, INDP
        INTEGER*8 :: I8
-       REAL*8 :: VOLT_CLEAN, VOLM
+       REAL*8 :: VOLT_CLEAN, VOLM, VMIN
        REAL*4 :: REQPP
 
        INTEGER, ALLOCATABLE, DIMENSION(:) :: INDICE2, INDICE
@@ -352,7 +352,7 @@
        ELSE IF (FLAG_DATA .EQ. 2) THEN
           WRITE(*,*) '-------> INPUT GRID BINARY FILE <-------'
        ELSE IF (FLAG_DATA .EQ. 3) THEN
-          WRITE(*,*) '-------> INPUT SIMULATION: AREPO <-------'
+          WRITE(*,*) '-------> INPUT SIMULATION: GADGET-LIKE <-------'
           IF (PARTTYPEX .EQ. 1) THEN
              WRITE(*,*) 'Particle type: ** GAS **'
           ELSE
@@ -360,7 +360,6 @@
              WRITE(*,*) 'Mass of DM particles:', MASSDM
           ENDIF
        ENDIF
-
        WRITE(*,*)
 
        !$!$ If GRID INPUT, allocate coarse grid
@@ -633,76 +632,6 @@
 
        WRITE(*,*)
 
-
-       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       ! Building k-d tree
-       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-       FLAG_KD = 0
-       !MASCLET k-d tree only if dark-matter sph is required
-       IF (FLAG_DATA .EQ. 0) THEN
-         !DARK-MATTER used
-         IF (FLAG_DENS .LE. 1 .OR. FLAG_DIV .LE. 1) THEN 
-         !SPH used
-         IF (FLAG_VEL_INTERP .EQ. 1 .OR. FLAG_DENS_INTERP .EQ. 1) THEN
-            FLAG_KD = 1
-         ENDIF
-         ENDIF
-       !PARTICLE DATA ALWAYS REQUIRES SPH SMOOTHING
-       ELSE IF (FLAG_DATA .EQ. 1 .OR. FLAG_DATA .EQ. 3) THEN
-         FLAG_KD = 1
-       ENDIF
-
-       IF (FLAG_KD .EQ. 1) THEN
-         
-         WRITE(*,*) 'Building k-d tree'
-
-         ALLOCATE(HPART(NPARTT),TREEPOINTS(NPARTT,3), &
-                  PART_DENS(NPARTT))
-
-         HPART(:) = 0.
-         PART_DENS(:) = 0.
-         TREEPOINTS(:,1) = RXPA(1:NPARTT)
-         DEALLOCATE(RXPA)
-         TREEPOINTS(:,2) = RYPA(1:NPARTT)
-         DEALLOCATE(RYPA)
-         TREEPOINTS(:,3) = RZPA(1:NPARTT)
-         DEALLOCATE(RZPA)
-
-#if periodic == 1
-            LPERIODIC = [LADO0, LADO0, LADO0]
-            call system_clock(t1,trate,tmax)
-            TREE => build_kdtree(TREEPOINTS,LPERIODIC)
-            call system_clock(t2,trate,tmax)
-#else
-            call system_clock(t1,trate,tmax)
-            TREE => build_kdtree(TREEPOINTS)
-            call system_clock(t2,trate,tmax)
-#endif
-
-         ALLOCATE(RXPA(PARTIRED),RYPA(PARTIRED),RZPA(PARTIRED))
-         !$OMP PARALLEL DO SHARED(PARTIRED,RXPA,RYPA,RZPA), &
-         !$OMP            PRIVATE(I8)
-         DO I8=1,PARTIRED
-            RXPA(I8)=0.0
-            RYPA(I8)=0.0
-            RZPA(I8)=0.0
-         END DO
-         RXPA(1:NPARTT) = TREEPOINTS(:,1)
-         RYPA(1:NPARTT) = TREEPOINTS(:,2)
-         RZPA(1:NPARTT) = TREEPOINTS(:,3)
-         DEALLOCATE(TREEPOINTS)
-
-         WRITE(*,*) '///////////// Time (sec) spent building k-d tree ',float(t2-t1)/1.e3
-         WRITE(*,*)
-
-       END IF
-       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        ! OUTPUT FILE HEADERS
        CALL NOMFILE3(DIR,ITER,FILEO,FILEO1,FILEO2,FILEO3)
@@ -714,6 +643,9 @@
        NLEV = LEVMAX - LEVMIN + 1
        WRITE(10,*) NLEV, LEVMIN, LEVMAX, NCOX, NCOY, NCOZ, LADO0
 
+       !Binary 3D maps 
+       !(STREAM -> no headers or structure, open with Numpy)
+       OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', STATUS='REPLACE', ACCESS = 'STREAM') 
 
        !Cubes ASCII catalogue
        IF (FLAG_WRITE_CUBES .EQ. 1) THEN
@@ -734,8 +666,6 @@
 
 
 !*-------------------------------------------------------------------------------*
-
-
        
 !*     LOOP OVER DIFFERENT LEVELS 
 !########################################
@@ -974,6 +904,77 @@
 !*        FROM INPUT DATA TO UNIFORM GRID
 !*-------------------------------------------------------------------------------*
 
+         !The kdtree is re-built for each level to liberate memory for void-finding variables
+         !needed after the interpolation of particles to the uniform grid. The kdtree is not needed anymore after that.
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         ! Building k-d tree
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+         FLAG_KD = 0
+
+         !MASCLET k-d tree only if dark-matter sph is required
+         IF (FLAG_DATA .EQ. 0) THEN
+            !DARK-MATTER used
+            IF (FLAG_DENS .LE. 1 .OR. FLAG_DIV .LE. 1) THEN 
+            !SPH used
+            IF (FLAG_VEL_INTERP .EQ. 1 .OR. FLAG_DENS_INTERP .EQ. 1) THEN
+               FLAG_KD = 1
+            ENDIF
+            ENDIF
+         !PARTICLE DATA ALWAYS REQUIRES SPH SMOOTHING
+         ELSE IF (FLAG_DATA .EQ. 1 .OR. FLAG_DATA .EQ. 3) THEN
+            FLAG_KD = 1
+         ENDIF
+
+         IF (FLAG_KD .EQ. 1) THEN
+            
+            WRITE(*,*) 'Building k-d tree'
+
+            ALLOCATE(HPART(NPARTT),TREEPOINTS(NPARTT,3), &
+                     PART_DENS(NPARTT))
+
+            HPART(:) = 0.
+            PART_DENS(:) = 0.
+            TREEPOINTS(:,1) = RXPA(1:NPARTT)
+            DEALLOCATE(RXPA)
+            TREEPOINTS(:,2) = RYPA(1:NPARTT)
+            DEALLOCATE(RYPA)
+            TREEPOINTS(:,3) = RZPA(1:NPARTT)
+            DEALLOCATE(RZPA)
+
+#if periodic == 1
+               LPERIODIC = [LADO0, LADO0, LADO0]
+               call system_clock(t1,trate,tmax)
+               TREE => build_kdtree(TREEPOINTS,LPERIODIC)
+               call system_clock(t2,trate,tmax)
+#else
+               call system_clock(t1,trate,tmax)
+               TREE => build_kdtree(TREEPOINTS)
+               call system_clock(t2,trate,tmax)
+#endif
+
+            ALLOCATE(RXPA(PARTIRED),RYPA(PARTIRED),RZPA(PARTIRED))
+            !$OMP PARALLEL DO SHARED(PARTIRED,RXPA,RYPA,RZPA), &
+            !$OMP            PRIVATE(I8)
+            DO I8=1,PARTIRED
+               RXPA(I8)=0.0
+               RYPA(I8)=0.0
+               RZPA(I8)=0.0
+            END DO
+            RXPA(1:NPARTT) = TREEPOINTS(:,1)
+            RYPA(1:NPARTT) = TREEPOINTS(:,2)
+            RZPA(1:NPARTT) = TREEPOINTS(:,3)
+            DEALLOCATE(TREEPOINTS)
+
+            WRITE(*,*) '///////////// Time (sec) spent building k-d tree ',float(t2-t1)/1.e3
+            WRITE(*,*)
+
+         END IF
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           !SPECIAL CASE: MASCLET
@@ -1057,7 +1058,7 @@
             ENDIF
 
             !U1DMCO is mass until this point, we need density
-            U1DMCO = U1DMCO / (DXX*DYY*DZZ*RETE**3) !density in MASCLET units
+            U1DMCO = U1DMCO / (DXX*DYY*DZZ) !density in MASCLET units
             U1DMCO = U1DMCO / ROTE !overdensity with respect to background density at z
 
 
@@ -1251,7 +1252,7 @@
             WRITE(*,*)
             
             !U1DMCO is mass until this point, we need density
-            U1DMCO = U1DMCO / (DXX*DYY*DZZ*RETE**3) !density in MASCLET units
+            U1DMCO = U1DMCO / (DXX*DYY*DZZ) !density in MASCLET units
             U1DMCO = U1DMCO / ROTE !overdensity with respect to background density at z
          
             !---------------------------------------
@@ -1304,7 +1305,7 @@
             WRITE(*,*) '///////////// Time (sec) spent during particle dens. interpolation (DM):', float(t2-t1)/1.e3
             WRITE(*,*)
             !U1DMCO is mass until this point, we need density
-            U1DMCO = U1DMCO / (DXX*DYY*DZZ*RETE**3) !density in MASCLET units
+            U1DMCO = U1DMCO / (DXX*DYY*DZZ) !density in MASCLET units
             U1DMCO = U1DMCO / ROTE !overdensity with respect to background density at z
             
           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1644,9 +1645,15 @@
             ENDIF
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+! Liberating memory from variables that are not needed anymore at this level
 !*-------------------------------------------------------------------------------*
+!*          Deallocate k-d tree variables
 !*-------------------------------------------------------------------------------*
-
+         IF (FLAG_KD .EQ. 1) THEN
+            CALL deallocate_kdtree(TREE)
+            DEALLOCATE(HPART)
+            DEALLOCATE(PART_DENS)
+         ENDIF
 
 !*-------------------------------------------------------------------------------*
 !*      Marking cells suitable for being void centres
@@ -1785,7 +1792,7 @@
           DO KZ=LOW1,LOW2
             DO JY=LOW1,LOW2
                DO IX=LOW1,LOW2
-                  IF(MARCA(IX,JY,KZ) .GT. 0.) THEN 
+                  IF(MARCA(IX,JY,KZ) .GT. 0) THEN 
                      IND=MARCA(IX,JY,KZ)
                      IF(UVOID(IND) .EQ. -1 ) THEN 
                         NCELLV(IND)=NCELLV(IND)+1
@@ -1795,54 +1802,57 @@
             ENDDO
           ENDDO
 
-          !min num. of cells for keeping voids; for few cell voids inertia tensor not reliable
-          DO I=1,NVOID
-            IND = INDICE(I)
-            IF(UVOID(IND) .GE. 0) CYCLE
-            IF(NCELLV(IND) .LT. NCELL_MIN) THEN
-               WHERE (MARCA  .EQ. IND)
-                  MARCA = 0
-               END WHERE
-               UVOID(IND)=0
-               WHERE (UVOID .EQ. IND)
-                  UVOID = 0
-               END WHERE
-               VOLNEW(IND)=0.
-               NCELLV(IND)=0
-            ENDIF
-          ENDDO
-
-          !Compute 3D Ellipsoid fitting with GEOMETRICAL CENTRE
-          !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-          CALL VOID_SHAPE(LOW1,LOW2,NVOID,INDICE,NCELLV,UVOID,GXC,GYC,GZC,EPS,IP)
-          !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
           !REDEFINE VOLNEW, WITH NCELLV
           VOLNEW(:)=0.
           DO IV=1, NVOID
             IND=INDICE(IV)
             IF(UVOID(IND) .GE. 0) CYCLE
-            IND=INDICE(IV)
             VOLM=DBLE(NCELLV(IND))*DBLE(DXX*DYY*DZZ)
             VOLNEW(IND)=VOLM
           ENDDO  
-      
-          !min radius
+
+          !min num. of cells for keeping voids; for few cell voids inertia tensor not reliable
+          !also min radius for keeping voids
+          VMIN = 4./3.*PI*RMIN**3
+
           DO I=1,NVOID
-            IND = INDICE(I)
-            IF(UVOID(IND) .GE. 0) CYCLE
-            IF(VOLNEW(IND).LT.4./3.*PI*RMIN**3) THEN
-               WHERE (MARCA  .EQ. IND)
-                  MARCA = 0
-               END WHERE
-               UVOID(IND)=0
-               WHERE (UVOID .EQ. IND)
-                  UVOID = 0
-               END WHERE
-               VOLNEW(IND)=0.
-               NCELLV(IND)=0
-            ENDIF
+          IND = INDICE(I)
+          IF(UVOID(IND) .GE. 0) CYCLE
+          IF(NCELLV(IND) .LT. NCELL_MIN .OR. &
+               VOLNEW(IND) .LT. VMIN) THEN
+            UVOID(IND) = 0   
+            WHERE (UVOID .EQ. IND)
+            UVOID = 0
+            END WHERE 
+
+            VOLNEW(IND) = 0.
+            NCELLV(IND) = 0
+          ENDIF
           ENDDO
+
+          !clean MARCA from voids that were deleted above
+          DO KZ=LOW1,LOW2
+          DO JY=LOW1,LOW2
+            DO IX=LOW1,LOW2
+               IND = MARCA(IX,JY,KZ)
+               IF(IND .GT. 0) THEN 
+                  IF(UVOID(IND) .NE. -1) THEN
+                     MARCA(IX,JY,KZ) = 0
+                  ENDIF
+               ENDIF
+            ENDDO
+          ENDDO
+          ENDDO
+
+          !Compute 3D Ellipsoid fitting with GEOMETRICAL CENTRE
+          WRITE(*,*) '************************************************'
+          Write(*,*) 'Calculating void shapes (ellipsoids)...'
+          call system_clock(t1,trate,tmax)
+          CALL VOID_SHAPE(LOW1,LOW2,NVOID,INDICE,NCELLV,UVOID,GXC,GYC,GZC,EPS,IP)
+          call system_clock(t2,trate,tmax)
+          WRITE(*,*) '///////////// Time (sec) spent during void shape calculation:', float(t2-t1)/1.e3
+          WRITE(*,*) '************************************************'
+          WRITE(*,*)
 
           !Calculate centre for every void: maximum divergence
           !This corresponds to the geometrical centre of the cube to which
@@ -1880,7 +1890,7 @@
             WRITE(*,*) 'Imposing periodic boundary conditions...'
                call system_clock(t1,trate,tmax)
                WRITE(*,*) NXX,NYY,NZZ
-               CALL VOID_PERIODIC(NVOID,INDICE,UVOID,GXC,GYC,GZC, &
+               CALL VOID_PERIODIC_2(NVOID,INDICE,UVOID,GXC,GYC,GZC, &
                                  VOLNEW,NXX,NYY,NZZ,DXX,DYY,DZZ, &
                                  LOW1,LOW2)
                call system_clock(t2,trate,tmax)
@@ -1905,16 +1915,17 @@
           UMEAN(:)=0. !overdensity: dens/dens_B
           MTOT(:)=0. !total mass in each void
           VOLT_CLEAN=0 !total volume in real voids
+          CELL_MASS = MEANDENS * DXX * DYY * DZZ
           DO KZ=1,NZZ
             DO JY=1,NYY
                DO IX=1, NXX
-                  IF(MARCA(IX,JY,KZ) .GT. 0.) THEN 
+                  IF(MARCA(IX,JY,KZ) .GT. 0) THEN 
                      IND=MARCA(IX,JY,KZ)
                      IF(UVOID(IND) .EQ. -1 ) THEN 
                         !VOIDS
                         NCELLV(IND)=NCELLV(IND)+1
                         UMEAN(IND)=UMEAN(IND)+U1CO(IX,JY,KZ)
-                        MTOT(IND)=MTOT(IND)+U1CO(IX,JY,KZ)*MEANDENS*DXX*DYY*DZZ*RETE**3 !in Msun
+                        MTOT(IND)=MTOT(IND)+U1CO(IX,JY,KZ)*CELL_MASS !in Msun
                         !TOTAL
                         VOLT_CLEAN=VOLT_CLEAN+DBLE(DXX*DYY*DZZ) !comoving
                      ENDIF
@@ -1933,7 +1944,6 @@
           DO IV=1, NVOID
             IND=INDICE(IV)
             IF(UVOID(IND) .GE. 0) CYCLE
-            IND=INDICE(IV)
             VOLM=DBLE(NCELLV(IND))*DBLE(DXX*DYY*DZZ)
             VOLNEW(IND)=VOLM
           ENDDO  
@@ -1942,17 +1952,29 @@
           DO I=1,NVOID
             IND = INDICE(I)
             IF(UVOID(IND) .GE. 0) CYCLE
-            IF(VOLNEW(IND).LT.4./3.*PI*RMIN**3) THEN
-               WHERE (MARCA  .EQ. IND)
-                  MARCA = 0
-               END WHERE
+            IF(VOLNEW(IND).LT.VMIN) THEN
                UVOID(IND)=0
                WHERE (UVOID .EQ. IND)
                   UVOID = 0
                END WHERE
+
                VOLNEW(IND)=0.
                NCELLV(IND)=0
             ENDIF
+          ENDDO
+
+          !clean MARCA from voids that were deleted above
+          DO KZ=LOW1,LOW2
+            DO JY=LOW1,LOW2
+               DO IX=LOW1,LOW2
+                  IND = MARCA(IX,JY,KZ)
+                  IF(IND .GT. 0) THEN 
+                     IF(UVOID(IND) .NE. -1) THEN
+                        MARCA(IX,JY,KZ) = 0
+                     ENDIF
+                  ENDIF
+               ENDDO
+            ENDDO
           ENDDO
 
           !NUMBER OF VOIDS AFTER POST-PROCESSING
@@ -2011,10 +2033,6 @@
 !    OUTPUT
 !*-------------------------------------------------------------*
 
-          !Binary 3D maps 
-          !(STREAM -> no headers or structure, open with Numpy)
-          OPEN(UNIT=11, FILE=FILEO1, FORM='UNFORMATTED', STATUS='REPLACE', ACCESS = 'STREAM') 
-            
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           !3D arrays file
@@ -2219,16 +2237,6 @@
       IF (ALLOCATED(RZPA)) DEALLOCATE(RZPA)
       IF (ALLOCATED(MASAP)) DEALLOCATE(MASAP)
       !----------------------------------------------------
-
-      !---------------------------------------
-      ! Deallocate k-d tree variables
-      !--------------------------------------- 
-      IF (FLAG_KD .EQ. 1) THEN
-         CALL deallocate_kdtree(TREE)
-         DEALLOCATE(HPART)
-         DEALLOCATE(PART_DENS)
-      ENDIF
-      !---------------------------------------
 
 !*////////////////////////////////////
 !*////////////////////////////////////
