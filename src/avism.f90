@@ -122,6 +122,7 @@
        REAL, ALLOCATABLE :: PART_DENS(:)
        type(KDTreeNode), pointer :: TREE,TREERAND
        REAL*4, ALLOCATABLE :: TREEPOINTS(:,:)
+       INTEGER*8, ALLOCATABLE :: TREEIDX(:)
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        
        !Periodic boundary conditions
@@ -544,7 +545,7 @@
          IF(FLAG_GADGET_READER .EQ. 0) THEN
             CALL READ_AREPO_HDF5(ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
          ELSE IF(FLAG_GADGET_READER .EQ. 1) THEN
-            CALL READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
+            CALL READ_FLAMINGO_HDF5(ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
          ELSE
             WRITE(*,*) 'Provide a proper GADGET reader option: 0:Arepo, 1:Flamingo-DMO'
             STOP 
@@ -856,10 +857,11 @@
           !STARS (not used)
           ALLOCATE(U1SCO(NXX,NYY,NZZ))
 
-          !$OMP PARALLEL DO SHARED(U1DMCO,U2DMCO,U3DMCO,U4DMCO,DIVERDMCO, &
+          !$OMP PARALLEL SHARED(U1DMCO,U2DMCO,U3DMCO,U4DMCO,DIVERDMCO, &
           !$OMP                   U1GCO,U2GCO,U3GCO,U4GCO,DIVERGCO,U1SCO, &
           !$OMP                   NXX,NYY,NZZ), &
           !$OMP PRIVATE(IX,JY,KZ), DEFAULT(NONE)
+          !$OMP DO SCHEDULE(STATIC)
           DO KZ=1,NZZ
           DO JY=1,NYY
           DO IX=1,NXX
@@ -879,6 +881,8 @@
           ENDDO
           ENDDO
           ENDDO
+          !$OMP END DO
+          !$OMP END PARALLEL
           
           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
           !voids-in-voids variables
@@ -932,41 +936,45 @@
             
             WRITE(*,*) 'Building k-d tree'
 
-            ALLOCATE(HPART(NPARTT),TREEPOINTS(NPARTT,3), &
+            ALLOCATE(HPART(NPARTT),TREEPOINTS(3,NPARTT), &
                      PART_DENS(NPARTT))
 
-            HPART(:) = 0.
-            PART_DENS(:) = 0.
-            TREEPOINTS(:,1) = RXPA(1:NPARTT)
+            !$OMP PARALLEL SHARED(HPART,PART_DENS,NPARTT), PRIVATE(I8), DEFAULT(NONE)
+            !$OMP DO SCHEDULE(STATIC)
+            DO I8=1,NPARTT
+               HPART(I8) = 0.0
+               PART_DENS(I8) = 0.0
+            ENDDO
+            !$OMP END DO
+            !$OMP END PARALLEL
+
+            TREEPOINTS(1,:) = RXPA(1:NPARTT)
             DEALLOCATE(RXPA)
-            TREEPOINTS(:,2) = RYPA(1:NPARTT)
+            TREEPOINTS(2,:) = RYPA(1:NPARTT)
             DEALLOCATE(RYPA)
-            TREEPOINTS(:,3) = RZPA(1:NPARTT)
+            TREEPOINTS(3,:) = RZPA(1:NPARTT)
             DEALLOCATE(RZPA)
+
+            !keep track of k-d tree shuffling of particles
+            ALLOCATE(TREEIDX(NPARTT))
+            !$OMP PARALLEL SHARED(TREEIDX,NPARTT), PRIVATE(I8), DEFAULT(NONE)
+            !$OMP DO SCHEDULE(STATIC)
+            DO I8=1,NPARTT
+                TREEIDX(I8) = I8
+            END DO
+            !$OMP END DO
+            !$OMP END PARALLEL
 
 #if periodic == 1
                LPERIODIC = [LADO0, LADO0, LADO0]
                call system_clock(t1,trate,tmax)
-               TREE => build_kdtree(TREEPOINTS,LPERIODIC)
+               TREE => build_kdtree(TREEPOINTS,TREEIDX,LPERIODIC)
                call system_clock(t2,trate,tmax)
 #else
                call system_clock(t1,trate,tmax)
-               TREE => build_kdtree(TREEPOINTS)
+               TREE => build_kdtree(TREEPOINTS,TREEIDX)
                call system_clock(t2,trate,tmax)
 #endif
-
-            ALLOCATE(RXPA(PARTIRED),RYPA(PARTIRED),RZPA(PARTIRED))
-            !$OMP PARALLEL DO SHARED(PARTIRED,RXPA,RYPA,RZPA), &
-            !$OMP            PRIVATE(I8)
-            DO I8=1,PARTIRED
-               RXPA(I8)=0.0
-               RYPA(I8)=0.0
-               RZPA(I8)=0.0
-            END DO
-            RXPA(1:NPARTT) = TREEPOINTS(:,1)
-            RYPA(1:NPARTT) = TREEPOINTS(:,2)
-            RZPA(1:NPARTT) = TREEPOINTS(:,3)
-            DEALLOCATE(TREEPOINTS)
 
             WRITE(*,*) '///////////// Time (sec) spent building k-d tree ',float(t2-t1)/1.e3
             WRITE(*,*)
@@ -999,11 +1007,11 @@
                                                 RXPA,RYPA,RZPA,U2PA,U3PA,U4PA,U2DMCO,U3DMCO,U4DMCO)
                IF (FLAG_VEL_INTERP .EQ. 1) THEN
 
-                  CALL PPART_DENS(KNEIGHBOURS,NPARTT,TREE,MASAP,PART_DENS)
+                  CALL PPART_DENS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,MASAP,PART_DENS)
 
                   WRITE(*,*) MINVAL(PART_DENS), MAXVAL(PART_DENS)
 
-                  CALL VVEL_INTERP_SPH_VW(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE, &
+                  CALL VVEL_INTERP_SPH_VW(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,TREEPOINTS,TREEIDX, &
                                  HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                                  U2DMCO,U3DMCO,U4DMCO)
 
@@ -1013,7 +1021,7 @@
                   WRITE(*,*) MINVAL(U4DMCO), MAXVAL(U4DMCO)
 
                   !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
-                  CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+                  CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,HPART)
 
                ENDIF
                call system_clock(t2,trate,tmax)
@@ -1038,13 +1046,13 @@
 
                   IF(FLAG_VEL_INTERP .EQ. 0) THEN
                      WRITE(*,*) 'Calculating smoothing length...'
-                     CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+                     CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,TREEPOINTS,TREEIDX,SMASK,HPART)
                      !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
-                     CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+                     CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,HPART)
                   ENDIF
 
                   CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
-                                       RXPA,RYPA,RZPA,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
+                                       TREEPOINTS,TREEIDX,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
                   
                   WRITE(*,*) MINVAL(U1DMCO*UM), MAXVAL(U1DMCO*UM)
 
@@ -1058,7 +1066,7 @@
             ENDIF
 
             !U1DMCO is mass until this point, we need density
-            U1DMCO = U1DMCO / (DXX*DYY*DZZ) !density in MASCLET units
+            U1DMCO = U1DMCO / (DXX*DYY*DZZ*RETE**3) !density in MASCLET units
             U1DMCO = U1DMCO / ROTE !overdensity with respect to background density at z
 
 
@@ -1181,11 +1189,11 @@
                                        RXPA,RYPA,RZPA,U2PA,U3PA,U4PA,U2DMCO,U3DMCO,U4DMCO)
             IF (FLAG_VEL_INTERP .EQ. 1) THEN
 
-               CALL PPART_DENS(KNEIGHBOURS,NPARTT,TREE,MASAP,PART_DENS)
+               CALL PPART_DENS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,MASAP,PART_DENS)
 
                WRITE(*,*) MINVAL(PART_DENS), MAXVAL(PART_DENS)
 
-               CALL VVEL_INTERP_SPH_VW(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE, &
+               CALL VVEL_INTERP_SPH_VW(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,TREEPOINTS,TREEIDX, &
                               HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,&
                               U2DMCO,U3DMCO,U4DMCO)
 
@@ -1197,14 +1205,14 @@
                           MAXVAL(U4DMCO,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0)
 
                !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
-               CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+               CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,HPART)
 
             !!!!
-            OPEN(UNIT=33, FILE='vel_cube.dat', FORM='UNFORMATTED', STATUS='REPLACE', ACCESS = 'STREAM') 
-            WRITE(33) (((U2DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
-            WRITE(33) (((U3DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
-            WRITE(33) (((U4DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
-            CLOSE(33)
+            !OPEN(UNIT=33, FILE='vel_cube.dat', FORM='UNFORMATTED', STATUS='REPLACE', ACCESS = 'STREAM') 
+            !WRITE(33) (((U2DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+            !WRITE(33) (((U3DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+            !WRITE(33) (((U4DMCO(IX,JY,KZ),IX=1,NXX),JY=1,NYY),KZ=1,NZZ)
+            !CLOSE(33)
             !!!!
 
             ENDIF              
@@ -1233,14 +1241,14 @@
 
                IF(FLAG_VEL_INTERP .EQ. 0) THEN
                   WRITE(*,*) 'Calculating smoothing length...'
-                  CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+                  CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,TREEPOINTS,TREEIDX,SMASK,HPART)
                   !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
-                  CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+                  CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,HPART)
                ENDIF
 
                CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
-                                    RXPA,RYPA,RZPA,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
-               
+                                    TREEPOINTS,TREEIDX,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
+                
                WRITE(*,*) MINVAL(U1DMCO*UM,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0), &
                            MAXVAL(U1DMCO*UM,MASK=SMASK(1:NXX,1:NYY,1:NZZ)>0)
 
@@ -1252,7 +1260,7 @@
             WRITE(*,*)
             
             !U1DMCO is mass until this point, we need density
-            U1DMCO = U1DMCO / (DXX*DYY*DZZ) !density in MASCLET units
+            U1DMCO = U1DMCO / (DXX*DYY*DZZ*RETE**3) !density in MASCLET units
             U1DMCO = U1DMCO / ROTE !overdensity with respect to background density at z
          
             !---------------------------------------
@@ -1288,15 +1296,15 @@
                !SINCE THIS TIME VVEL IS NOT CALLED PRIOR TO DDENS
                !WE NEED TO CALL H_DISTANCE TO COMPUTE HPART
                WRITE(*,*) 'Calculating smoothing length...'
-               CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,SMASK,HPART)
+               CALL H_DISTANCE(KNEIGHBOURS,NXX,NYY,NZZ,NPARTT,TREE,TREEPOINTS,TREEIDX,SMASK,HPART)
 
                !CHECK PARTICLES WITHOUT SMOOTHING LENGTH!
-               CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+               CALL FILL_H_ZEROS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,HPART)
 
                WRITE(*,*) 'Applying density SPH KERNEL!'
 
                CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,NPARTT, &
-                                     RXPA,RYPA,RZPA,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
+                                     TREEPOINTS,TREEIDX,HPART,MASAP,SMASK,U1DMCO) !--> U1DMCO
                                     
             ENDIF
             call system_clock(t2,trate,tmax)
@@ -1305,7 +1313,7 @@
             WRITE(*,*) '///////////// Time (sec) spent during particle dens. interpolation (DM):', float(t2-t1)/1.e3
             WRITE(*,*)
             !U1DMCO is mass until this point, we need density
-            U1DMCO = U1DMCO / (DXX*DYY*DZZ) !density in MASCLET units
+            U1DMCO = U1DMCO / (DXX*DYY*DZZ*RETE**3) !density in MASCLET units
             U1DMCO = U1DMCO / ROTE !overdensity with respect to background density at z
             
           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1372,14 +1380,25 @@
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+          ! Liberating memory from variables that are not needed anymore at this level
+          !*-------------------------------------------------------------------------------*
+          !*          Deallocate k-d tree variables, other deallocated after SURVEY part
+          !*-------------------------------------------------------------------------------*
+          IF (FLAG_KD .EQ. 1) THEN
+            DEALLOCATE(PART_DENS)
+            ALLOCATE(RXPA(NPARTT),RYPA(NPARTT),RZPA(NPARTT))
+            RXPA(:) = TREEPOINTS(1,:)
+            RYPA(:) = TREEPOINTS(2,:)
+            RZPA(:) = TREEPOINTS(3,:)
+            DEALLOCATE(TREEPOINTS)
+            DEALLOCATE(TREEIDX)
+          ENDIF
 
          !* Which density components to consider
           ALLOCATE(U1CO(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2))
           IF(FLAG_DENS .EQ. 0) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO + U1GCO
           IF(FLAG_DENS .EQ. 1) U1CO(1:NXX,1:NYY,1:NZZ) = U1DMCO
           IF(FLAG_DENS .EQ. 2) U1CO(1:NXX,1:NYY,1:NZZ) = U1GCO
-
-
 
          !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
          !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -1389,6 +1408,7 @@
          !* Until here, density is in rho_background units -> to units of mean density
           IF(FLAG_DATA .NE. 2) THEN
 
+            !U1CO now is in MASCLET units: u.m (1+z)^3 / (u.l)^3
             U1CO = U1CO*ROTE
 
             !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1413,7 +1433,8 @@
                MEANDENS = MEANDENS8 / REAL(BASSINT8, KIND = 8)
 
                U1CO = U1CO / MEANDENS !rho/rhomean
-
+               
+               !meandens to Msun*(1+z)^3/cMpc^3
                MEANDENS = MEANDENS * (UM / UL**3)
 
                WRITE(*,*) 'Mean density, background, fraction (Msun/Mpc^3):', MEANDENS, ROTE * (UM / UL**3), &
@@ -1487,7 +1508,7 @@
                   ! !!!! SMOOTHER AND SLOWER OPTION: may contaminate voids with weights from outside
                   ! !!!! h distance of randoms: average of neighbour particles/galaxies
                   ! call system_clock(t1,trate,tmax)
-                  ! CALL H_RANDOMS(INT(NRAND,KIND=8),NPARTT,RANDX,RANDY,RANDZ,TREE,HPART,HRAND,4)
+                  ! CALL H_RANDOMS(INT(NRAND,KIND=8),NPARTT,RANDX,RANDY,RANDZ,TREE,TREEPOINTS,TREEIDX,HPART,HRAND,4)
                   ! RANDMEAN = SUM(REAL(HRAND,KIND=8))/REAL(NRAND,KIND=8)
                   ! RANDSTD = SQRT(SUM((REAL(HRAND,KIND=8)-RANDMEAN)**2)/REAL(NRAND,KIND=8))
                   ! HRANDMAX = RANDMEAN + RANDSTD
@@ -1503,27 +1524,32 @@
                   !!!! FASTER BUT NOISIER, more local-bound
                   !!!! h distance obtained as with particle/galaxies
                   !!!! weights are preserved in space
-                  ALLOCATE(TREEPOINTS(NRAND,3))
-                  TREEPOINTS(:,1) = RANDX(:)
-                  TREEPOINTS(:,2) = RANDY(:)
-                  TREEPOINTS(:,3) = RANDZ(:)
+                  ALLOCATE(TREEPOINTS(3,NRAND))
+                  TREEPOINTS(1,:) = RANDX(:)
+                  TREEPOINTS(2,:) = RANDY(:)
+                  TREEPOINTS(3,:) = RANDZ(:)
+
+                  ALLOCATE(TREEIDX(NRAND))
+                  DO I8=1,NRAND
+                      TREEIDX(I8) = I8
+                  END DO
+
 #if periodic == 1
                   call system_clock(t1,trate,tmax)
-                  TREERAND => build_kdtree(TREEPOINTS,LPERIODIC)
+                  TREERAND => build_kdtree(TREEPOINTS,TREEIDX,LPERIODIC)
                   call system_clock(t2,trate,tmax)
 #else
                   call system_clock(t1,trate,tmax)
-                  TREERAND => build_kdtree(TREEPOINTS)
+                  TREERAND => build_kdtree(TREEPOINTS,TREEIDX)
                   call system_clock(t2,trate,tmax)
 #endif
                   
                   WRITE(*,*) '   ///////////// Time (sec) building RANDOM k-d tree ',float(t2-t1)/1.e3
-                  DEALLOCATE(TREEPOINTS)
                   KNEIGHBOURS2 = MIN(8*KNEIGHBOURS, 256)
                   Write(*,*) '   KNEIGHBOURS2:', KNEIGHBOURS2
                   call system_clock(t1,trate,tmax)
-                  CALL H_DISTANCE(KNEIGHBOURS2, NXX,NYY,NZZ,INT(NRAND,KIND=8),TREERAND,SMASK,HRAND)
-                  CALL FILL_H_ZEROS(KNEIGHBOURS2,INT(NRAND,KIND=8),RANDX,RANDY,RANDZ,TREerand,HRAND)
+                  CALL H_DISTANCE(KNEIGHBOURS2,NXX,NYY,NZZ,INT(NRAND,KIND=8),TREERAND,TREEPOINTS,TREEIDX,SMASK,HRAND)
+                  CALL FILL_H_ZEROS(KNEIGHBOURS2,INT(NRAND,KIND=8),TREERAND,TREEPOINTS,TREEIDX,HRAND)
                   call system_clock(t2,trate,tmax)
                   WRITE(*,*) '   ///////////// Time (sec) obtaining smoothing lengths ',float(t2-t1)/1.e3
                   WRITE(*,*)
@@ -1532,7 +1558,7 @@
 
                   WRITE(*,*) '   SPH random to grid...'
                   call system_clock(t1,trate,tmax)
-                  CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,INT(NRAND,KIND=8),RANDX,RANDY,RANDZ,HRAND,MASSRAND,SMASK,U1RAND)
+                  CALL DDENS_INTERP_SPH(NXX,NYY,NZZ,INT(NRAND,KIND=8),TREEPOINTS,TREEIDX,HRAND,MASSRAND,SMASK,U1RAND)
                   call system_clock(t2,trate,tmax) 
 
                   WRITE(*,*) '   check:', MINVAL(U1RAND*UM, MASK=SMASK>0), MAXVAL(U1RAND*UM, MASK=SMASK>0), &
@@ -1540,6 +1566,7 @@
 
                   WRITE(*,*) '   ///////////// Time (sec) spent in SPH (randoms):', float(t2-t1)/1.e3
                   WRITE(*,*)
+                  DEALLOCATE(TREEPOINTS,TREEIDX)
                ENDIF
                !--------------------------------------------------------
 
@@ -1605,9 +1632,19 @@
 
           ELSE !GRID input overdensity: assumed in rho_background units
 
-            MEANDENS = ROTE * (UM / UL**3) !mean density in Msun/Mpc^3
+            !MEANDENS in Msun*(1+z)^3/cMpc^3
+            MEANDENS = ROTE * (UM / UL**3) 
 
           ENDIF
+
+         !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+         !!!! deallocate rest of k-d tree variables
+         IF (FLAG_KD .EQ. 1) THEN
+            CALL deallocate_kdtree(TREE)
+            DEALLOCATE(HPART)
+         ENDIF
+         !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 
          !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
          !$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -1644,16 +1681,6 @@
                CALL REAL_MAKE_PERIODIC(NXX,NYY,NZZ,NPLUS,DIVERCO)
             ENDIF
           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-! Liberating memory from variables that are not needed anymore at this level
-!*-------------------------------------------------------------------------------*
-!*          Deallocate k-d tree variables
-!*-------------------------------------------------------------------------------*
-         IF (FLAG_KD .EQ. 1) THEN
-            CALL deallocate_kdtree(TREE)
-            DEALLOCATE(HPART)
-            DEALLOCATE(PART_DENS)
-         ENDIF
 
 !*-------------------------------------------------------------------------------*
 !*      Marking cells suitable for being void centres
@@ -1915,7 +1942,7 @@
           UMEAN(:)=0. !overdensity: dens/dens_B
           MTOT(:)=0. !total mass in each void
           VOLT_CLEAN=0 !total volume in real voids
-          CELL_MASS = MEANDENS * DXX * DYY * DZZ
+          CELL_MASS = MEANDENS * DXX * DYY * DZZ / (1+ZETA)**3
           DO KZ=1,NZZ
             DO JY=1,NYY
                DO IX=1, NXX
@@ -2224,7 +2251,6 @@
          DEALLOCATE(U2G,U3G,U4G)
          DEALLOCATE(U11G,U12G,U13G,U14G,U11S,U11DM)
        ENDIF
-
 
       !------------------------------------------------------
       ! Deallocate PARTICLE input variables

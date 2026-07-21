@@ -757,19 +757,21 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
      REAL*4:: RX1, RX2, RY1, RY2, RZ1, RZ2
      INTEGER :: INDP, INDP2
      INTEGER, DIMENSION(NVOID):: MAJOR
+     REAL*4, ALLOCATABLE :: TREEPOINTS(:,:)
+     INTEGER(KIND=8), ALLOCATABLE :: TREEIDX(:)
 !search
      INTEGER:: IX1, IX2, JY1, JY2, KZ1, KZ2, IX3, IX4, JY3, JY4, KZ3, KZ4
      INTEGER:: DIST,DIST2
 !output variables
      REAL*4, DIMENSION(NVOID)::GXC,GYC,GZC !geometrical center of the void
-     REAL*4 :: TREEPOINTS(NVOID,3)
      REAL*4, DIMENSION(NVOID):: VOLNEW
      INTEGER, DIMENSION(NVOID):: UVOID
 !k-d tree
      REAL :: LPERIODIC(3)
      type(KDTreeNode), pointer :: TREE
-     type(KDTreeResult) :: QUERY
-     INTEGER :: CONTA
+     REAL,ALLOCATABLE :: Q_DIST(:)
+     INTEGER(KIND=8),ALLOCATABLE :: Q_NEIGH(:)
+     INTEGER :: CONTA, BUFF
      REAL*4 :: TAR(3), RTHIS, RR
 
      !DX--> DDX
@@ -799,16 +801,27 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
      ENDDO
      
      !Build k-d tree for fast neighbour search
-     TREEPOINTS(:,1)=GXC(:)
-     TREEPOINTS(:,2)=GYC(:)
-     TREEPOINTS(:,3)=GZC(:)
+     allocate(TREEPOINTS(3,NVOID))
+     TREEPOINTS(1,:)=GXC(:)
+     TREEPOINTS(2,:)=GYC(:)
+     TREEPOINTS(3,:)=GZC(:)
 
+     allocate(TREEIDX(NVOID))
+     do I=1,NVOID
+        TREEIDX(I)=I
+     enddo
+   
 #if periodic == 1
       LPERIODIC = [LADO0PLUS, LADO0PLUS, LADO0PLUS]
-      TREE => build_kdtree(TREEPOINTS,LPERIODIC)
+      TREE => build_kdtree(TREEPOINTS, TREEIDX, LPERIODIC)
 #else
-      TREE => build_kdtree(TREEPOINTS)
+      TREE => build_kdtree(TREEPOINTS, TREEIDX)
 #endif 
+
+     !allocate possible results
+     BUFF = 1000
+     allocate(Q_DIST(BUFF))
+     allocate(Q_NEIGH(BUFF))
 
      UVOID(:)=-1 !if 0, void has been merged or is unable to be merged, 
                  !if -1 it needs to be merged
@@ -948,13 +961,12 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
         !query radius
         RR = (2*RTHIS) + 2.1*SQRT(3.)*DXX*NBUFF
 
-        QUERY = ball_search(TREE, TAR, RR, .true.) 
-        CONTA = SIZE(QUERY%idx)
+        call ball_search(TREE, TAR, RR, TREEPOINTS, BUFF, Q_NEIGH, Q_DIST, CONTA, .true.)
 
          ! DO J=I+1,NVOID
          !   IND2 = INDICE(J)        
          DO II=1,CONTA
-           IND2=QUERY%idx(II)
+           IND2=TREEIDX(Q_NEIGH(II))
 
            IF(IND2.EQ.IND1) CYCLE !it is the same void
            IF(MAJOR(IND2) .EQ. 1) CYCLE !it is a major void
@@ -1017,6 +1029,10 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
 
       !Deallocate k-d tree
       call deallocate_kdtree(TREE)
+      deallocate(TREEPOINTS)
+      deallocate(TREEIDX)
+      DEALLOCATE(Q_DIST)
+      DEALLOCATE(Q_NEIGH)
 
 !***************************************************************************
 END SUBROUTINE MERGE_VOID
@@ -1894,7 +1910,7 @@ SUBROUTINE VOID_DECONSTRUCTION(NTH,NVOID,INDICE,UVOID,MARCA, &
    !$OMP PRIVATE(DIST,DIST2,II,IXX,JYY,KZZ,FLAG), &
    !$OMP PRIVATE(INIX,INIY,INIZ,IFIX,IFIY,IFIZ), &
    !$OMP PRIVATE(FLAGX1,FLAGX2,FLAGY1,FLAGY2,FLAGZ1,FLAGZ2), &
-   !$OMP DEFAULT(NONE), SCHEDULE(DYNAMIC)
+   !$OMP DEFAULT(NONE), SCHEDULE(STATIC, 1000)
    !-----------------------
    DO I=1,NVOID
    !-----------------------

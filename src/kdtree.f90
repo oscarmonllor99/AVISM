@@ -1,61 +1,11 @@
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-! cosmokdtree module
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-! GRUP DE COSMOLOGIA COMPUTACIONAL (GCC) UNIVERSITAT DE VALENCIA
-! Authors: Oscar Monllor Berbegal and David Valles Perez
-! Date: Genuary 30th 2025
-! Last update: March 10th 2026
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-! Brief description:
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-! - This module implements an optimized parallel k-d tree construction and 
-!   fast search for k-nearest neighbors and range queries.
-!
-! - Sliding midpoint splitting rule is used. Boundind boxes are stored
-!   for faster search (faster than hyperplane distance checks).
-!
-! - The tree is built top-down and out-of-place in parallel using OpenMP tasks due 
-!   to Divide and Conquer nature of the algorithm. Nested parallelism
-!   must be enabled in OpenMP to allow parallelism at the top levels.
-!
-! - The search for k-nearest neighbors uses a Max-Heap storage
-!   to efficiently keep track of the k nearest points and a Min-Heap together
-!   with a priority queue for best-first traversal of the tree.
-!   
-! - Ball search leverages dynamic arrays to store results and bounding box
-!   checks for efficient traversal.
-! 
-! - Quicksort is used to sort the distances and indices of    
-!   points in the final knn_search max_heap and range queries results.
-!   We have seen that even having an already existing max_heap structure,
-!   quicksort outperforms heapsort by a 10-20% factor.
-!
-! - For knn (ball) queries, the results are sorted (unsorted) by default.
-!
-! - INT*8 indices and REAL*8 points are allowed through conditional compilation
-!
-! - Similarly, periodic boundary conditions are allowed
-!
-! - Dimensionality is set to 3 by default, but can be changed to an
-!   arbitrary value (e.g. 6D phase space).
-!
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-! Pending improvements:
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-! - Better parallelism (scaling) for tree building (if possible)
-! - Lower memory usage (more in-place)
-!
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 !#######################################################
 module cosmokdtree
 !#######################################################
     implicit none
     private  
     public :: build_kdtree, deallocate_kdtree, & 
-              knn_search, ball_search, box_search, &
-              KDTreeNode, KDTreeResult, deallocate_query
-
+              knn_search, ball_search, &
+              KDTreeNode
     !+++++++++++++++++++++++++++++++
     !++++ Dimensionality (default 3D)
     !+++++++++++++++++++++++++++++++   
@@ -96,24 +46,11 @@ module cosmokdtree
         integer :: axis !splitting axis (1 for x, 2 for y, 3 for z, 4 for w, ...)
         type(KDTreeNode), pointer :: left => null()  !left child node
         type(KDTreeNode), pointer :: right => null() !right child node
-        real(kind=prec) :: maxbounds(ndim) !node bounding box
-        real(kind=prec) :: minbounds(ndim)
         !leaf variables
         logical :: is_leaf  !indicates if the node is a leaf
-        real(kind=prec), pointer :: leaf_points(:, :) => null()  !save points for thread-safeity and self-containance
-        integer(kind=intkind), pointer :: leaf_indices(:) => null()  !
+        integer(kind=intkind) :: start_idx
+        integer(kind=intkind) :: end_idx
     end type KDTreeNode
-
-    !for queries
-    type :: KDTreeResult
-        integer(kind=intkind), allocatable :: idx(:)
-        real(kind=prec), allocatable :: dist(:)
-    end type KDTreeResult
-
-    !array of nodes for priority queue
-    type :: node_queue
-        type(KDTreeNode), pointer :: node 
-    end type node_queue
     !+++++++++++++++++++++++++++++++
 
 contains
@@ -122,24 +59,24 @@ contains
     ! Initialize kd-tree construction (not in-place for thread-safety)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #if periodic == 1
-    function build_kdtree(points_in, L_in, leaf) result(tree)
+    function build_kdtree(points, idx, L_in, leaf) result(tree)
 #else
-    function build_kdtree(points_in, leaf) result(tree)
+    function build_kdtree(points, idx, leaf) result(tree)
 #endif
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         use omp_lib
         implicit none
         !in
-        real(kind=prec), intent(in) :: points_in(:, :)
+        real(kind=prec), intent(inout) :: points(:, :)
+        integer(kind=intkind), intent(inout) :: idx(:)
         integer, intent(in), optional :: leaf 
 #if periodic == 1
         real(kind=prec), intent(in) :: L_in(:)
         integer :: flag_stop
-        integer :: j, ndim_par
+        integer :: ndim_par
 #endif
         !local
-        real(kind=prec), allocatable :: points(:,:)
-        integer(kind=intkind), allocatable :: indices(:)
+        integer :: j
         integer(kind=intkind) :: n, i
         integer :: depth, max_depth, nproc, leafsize
         real(kind=prec) :: bounds(2*ndim)
@@ -157,12 +94,12 @@ contains
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
         ! Check dimensionality of input
-        if (size(points_in, 2) /= ndim) then
+        if (size(points, 1) /= ndim) then
             STOP 'Input points must have the same dimensionality as the tree!'
         end if
 
         ! Number of points
-        n = size(points_in, 1, kind=intkind)
+        n = size(points, 2, kind=intkind)
 
 #if periodic == 1
         ! Check dimensionality of input
@@ -176,12 +113,12 @@ contains
         !points within (-L/2, L/2)
         flag_stop = 0
         ndim_par = ndim
-        !$OMP PARALLEL SHARED(points_in,n,L,ndim_par), &
+        !$OMP PARALLEL SHARED(points,n,L,ndim_par), &
         !$OMP PRIVATE(i,j)
         !$OMP DO REDUCTION(+:flag_stop)
-        do j=1,ndim_par
-            do i=1,n
-                if (points_in(i,j) .lt. -L(j)/2 .or. points_in(i,j) .gt. L(j)/2) flag_stop = 1
+        do i=1,n
+            do j=1,ndim_par
+                if (points(j,i) .lt. -L(j)/2 .or. points(j,i) .gt. L(j)/2) flag_stop = 1
             enddo
         enddo
         !$OMP ENDDO
@@ -190,12 +127,6 @@ contains
         if (flag_stop .gt. 0) STOP 'Points outside (-L/2, L/2) range !!'
 #endif
 
-        !auxiliar index and point arrays (out-of-place)!!!
-        allocate(indices(n))
-        indices = [(i, i=1, n)]
-        allocate(points(n, ndim))
-        points = points_in
-        
         !depth for parallelism control
         depth = 0
 
@@ -211,7 +142,7 @@ contains
         if ( present(leaf) ) then 
             leafsize = leaf
         else
-            leafsize = 16
+            leafsize = 64
         endif
 
         !init point bounds -> check periodic
@@ -223,17 +154,24 @@ contains
         bounds(5) = -L(3)/2.
         bounds(6) =  L(3)/2.
 #else
-        do i = 1, ndim
-            bounds(2*i-1) = minval(points(:, i))
-            bounds(2*i) = maxval(points(:, i)) 
+        !bounds
+        do j = 1, ndim
+            bounds(2*j-1) = HUGE(0.0)
+            bounds(2*j)   = -HUGE(0.0)
+        end do
+
+        !find all min/max without array temporaries
+        do i = 1, n
+            do j = 1, ndim
+                if (points(j, i) < bounds(2*j-1)) bounds(2*j-1) = points(j, i)
+                if (points(j, i) > bounds(2*j))   bounds(2*j)   = points(j, i)
+            end do
         end do
 #endif
 
-        tree => build_kdtree_recursive(points, indices, depth, max_depth, leafsize, bounds)
+        !recursive build call
+        tree => build_kdtree_recursive(points, idx, 1_intkind, n, depth, max_depth, leafsize, bounds)
 
-        !deallocate temporary/out-of-place building arrays
-        deallocate(points)
-        deallocate(indices)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     end function build_kdtree
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -250,16 +188,6 @@ contains
         !children
         call deallocate_kdtree(node%left)
         call deallocate_kdtree(node%right)
-
-        !leaf data
-        if (node%is_leaf .eqv. .true.) then
-            if (associated(node%leaf_points)) then
-                deallocate(node%leaf_points)
-            end if
-            if (associated(node%leaf_indices)) then
-                deallocate(node%leaf_indices)
-            end if
-        end if
 
         !self
         deallocate(node)
@@ -283,13 +211,14 @@ contains
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! Recursive kd-tree building function according to ---> sliding midpoint rule <----
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    recursive function build_kdtree_recursive(points,indices,depth,max_depth,leafsize,bounds) result(node)
+    recursive function build_kdtree_recursive(points,idx,p_start,p_end,depth,max_depth,leafsize,bounds) result(node)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     use omp_lib
     implicit none
     !in
-    real(kind=prec), intent(inout) :: points(:, :) !(n, ndim)
-    integer(kind=intkind), intent(inout) :: indices(:)
+    real(kind=prec), intent(inout) :: points(:, :) !(ndim, n)
+    integer(kind=intkind), intent(inout) :: idx(:)
+    integer(kind=intkind), intent(in) :: p_start, p_end !range of points indices to partition
     integer, intent(in) :: depth
     integer, intent(in) :: max_depth
     integer, intent(in) :: leafsize
@@ -306,11 +235,11 @@ contains
     real(kind=prec) :: minx, maxx
     integer(kind=intkind) :: minind, maxind
     real(kind=prec) :: temp_point(ndim) !for swapping
-    integer(kind=intkind) :: temp_idx
+    integer(kind=intkind) :: temp_idx !for swapping
 
     allocate(node)
 
-    size_points = size(points, 1)
+    size_points = p_end - p_start + 1
 
     if (size_points == 0) then
         !should never happen, return a null node
@@ -318,24 +247,11 @@ contains
         return
     end if
 
-    !saves bounding box for queries
-    do j=1,ndim
-        node%minbounds(j) = bounds(2*j-1)
-        node%maxbounds(j) = bounds(2*j)
-    enddo
-
     if (size_points <= leafsize) then
         node%is_leaf = .true.
-        ! Store all points and indices in the leaf node
-        ! Leaf points are stored ->(ndim, n)<- for contiguous memory access in query
-        allocate(node%leaf_points(ndim, size(points, 1, kind=intkind)))
-        allocate(node%leaf_indices(size(points, 1, kind=intkind)))
-        do i = 1, size_points
-            do j = 1, ndim
-                node%leaf_points(j,i) = points(i,j)
-            enddo
-            node%leaf_indices(i) = indices(i)
-        enddo
+        ! Store start and end indices of the points in the leaf node
+        node%start_idx = p_start
+        node%end_idx = p_end
         node%left => null()
         node%right => null()
         return
@@ -346,8 +262,18 @@ contains
     ! Compute necessary statistics to choose splitting axis and point
     side = 0.
     do j = 1, ndim
-        minvals(j) = minval(points(:, j))
-        maxvals(j) = maxval(points(:, j))
+        minvals(j) = HUGE(0.0)
+        maxvals(j) = -HUGE(0.0)
+    end do
+
+    do i = p_start, p_end
+        do j = 1, ndim
+            if (points(j, i) < minvals(j)) minvals(j) = points(j, i)
+            if (points(j, i) > maxvals(j)) maxvals(j) = points(j, i)
+        end do
+    end do
+
+    do j = 1, ndim
         side(j)    = bounds(2*j) - bounds(2*j-1)
         spreads(j) = maxvals(j) - minvals(j)
     end do
@@ -367,23 +293,35 @@ contains
     midpoint = 0.5 * (bounds(2*axis-1) + bounds(2*axis))
 
     !check sliding
-    minx = minvals(axis)
-    maxx = maxvals(axis)
-    minind = minloc(points(:, axis), dim = 1)
-    maxind = maxloc(points(:, axis), dim = 1)
+    ! minx = minvals(axis)
+    ! maxx = maxvals(axis)
+    ! minind = minloc(points(axis, :), dim = 1)
+    ! maxind = maxloc(points(axis, :), dim = 1)
+    minx = HUGE(0.0)
+    maxx = -HUGE(0.0)
+    do i = p_start, p_end
+        if (points(axis, i) < minx) then
+            minx = points(axis, i)
+            minind = i
+        end if
+        if (points(axis, i) > maxx) then
+            maxx = points(axis, i)
+            maxind = i
+        end if
+    end do
 
     !slide the hyperplane to the closest point 
     if (minx >= midpoint) then
         midpoint = minx
 
         !swaping mindind to the first position
-        temp_point = points(1, :)
-        points(1, :) = points(minind, :)
-        points(minind, :) = temp_point
+        temp_point = points(:, p_start)
+        points(:, p_start) = points(:, minind)
+        points(:, minind) = temp_point
 
-        temp_idx = indices(1)
-        indices(1) = indices(minind)
-        indices(minind) = temp_idx
+        temp_idx = idx(p_start)
+        idx(p_start) = idx(minind)
+        idx(minind) = temp_idx
 
         n_left = 1 !just one point on the left
 
@@ -392,24 +330,24 @@ contains
         midpoint = maxx
         
         !swaping maxind to the last position
-        temp_point = points(size_points, :)
-        points(size_points, :) = points(maxind, :)
-        points(maxind, :) = temp_point
+        temp_point = points(:, p_end)
+        points(:, p_end) = points(:, maxind)
+        points(:, maxind) = temp_point
 
-        temp_idx = indices(size_points)
-        indices(size_points) = indices(maxind)
-        indices(maxind) = temp_idx
+        temp_idx = idx(p_end)
+        idx(p_end) = idx(maxind)
+        idx(maxind) = temp_idx
 
         n_left = size_points - 1 !all points on the left except one
 
     !do not slide, default: midpoint splitting rule
     else
         
-        call partition(points, indices, midpoint, axis, size_points, n_left)
+        call partition(points, idx, p_start, p_end, midpoint, axis, n_left)
         
     end if
-    ! all points with points(:,axis) < midpoint are in the left side
-    ! all points with points(:,axis) >= midpoint are in the right side
+    ! all points with points(axis, :) < midpoint are in the left side
+    ! all points with points(axis, :) >= midpoint are in the right side
     
     !splitting plane
     node%point = midpoint
@@ -427,371 +365,120 @@ contains
     !$OMP SINGLE
 
     !$OMP TASK
-    node%left => build_kdtree_recursive(points(1:n_left,:),indices(1:n_left),depth+1,max_depth,leafsize, &
-                                        bounds_left)
+    node%left => build_kdtree_recursive(points, idx, p_start, p_start + n_left - 1, &
+                                        depth+1, max_depth, leafsize, bounds_left)
     !$OMP END TASK
 
     !$OMP TASK
-    node%right => build_kdtree_recursive(points(n_left+1:size_points,:), &
-                                        indices(n_left+1:size_points), depth+1, max_depth, leafsize, &
-                                        bounds_right)
+    node%right => build_kdtree_recursive(points, idx, p_start + n_left, p_end, &
+                                        depth+1, max_depth, leafsize, bounds_right)
     !$OMP END TASK
 
     !$OMP END SINGLE
     !$OMP END PARALLEL
     else
-    node%left => build_kdtree_recursive(points(1:n_left,:),indices(1:n_left),depth+1,max_depth,leafsize, &
-                                        bounds_left)
-    node%right => build_kdtree_recursive(points(n_left+1:size_points,:), &
-                                        indices(n_left+1:size_points), depth+1, max_depth, leafsize, &
-                                        bounds_right)
+    node%left => build_kdtree_recursive(points, idx, p_start, p_start + n_left - 1, &
+                                        depth+1, max_depth, leafsize, bounds_left)
+    node%right => build_kdtree_recursive(points, idx, p_start + n_left, p_end, &
+                                        depth+1, max_depth, leafsize, bounds_right)
     end if
 
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     end function build_kdtree_recursive
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! Partition function to split points around a pivot value along a given axis
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine partition(points, indices, pivot_value, axis, size_points, n_left) 
+    subroutine partition(points, idx, p_start, p_end, pivot_value, axis, n_left)
         implicit none
         real(kind=prec), intent(inout) :: points(:, :)
-        integer(kind=intkind), intent(inout) :: indices(:)
+        integer(kind=intkind), intent(inout) :: idx(:)
+        integer(kind=intkind), intent(in) :: p_start, p_end
         integer, intent(in) :: axis
-        integer(kind=intkind), intent(in) :: size_points
-        integer(kind=intkind) :: i, j
         real(kind=prec):: pivot_value
         integer(kind=intkind) :: n_left
+        integer(kind=intkind) :: i, j
+        real(kind=prec):: temp_point(ndim)
+        integer(kind=intkind) :: temp_idx
         
         n_left = 0
-        do i = 1, size_points
-            if (points(i, axis) < pivot_value) then
-                j = n_left + 1
+        do i = p_start, p_end
+            if (points(axis, i) < pivot_value) then
+                j = p_start + n_left
                 if (i /= j) then
-                    call swap(points, indices, i, j)
+                    temp_point(:) = points(:, i)
+                    points(:, i)  = points(:, j)
+                    points(:, j)  = temp_point(:)
+
+                    temp_idx = idx(i)
+                    idx(i) = idx(j)
+                    idx(j) = temp_idx
                 end if
                 n_left = n_left + 1
             end if
         end do
-
     end subroutine partition
-
-    subroutine swap(points, indices, i, j)
-        implicit none
-        real(kind=prec), intent(inout) :: points(:, :)
-        integer(kind=intkind), intent(inout) :: indices(:)
-        integer(kind=intkind), intent(in) :: i, j
-        real(kind=prec):: temp_point(ndim)
-        integer(kind=intkind) :: temp_index
-    
-        temp_point = points(i, :)
-        points(i, :) = points(j, :)
-        points(j, :) = temp_point
-    
-        temp_index = indices(i)
-        indices(i) = indices(j)
-        indices(j) = temp_index
-
-    end subroutine swap
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! k-nearest neighbor search main function
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    function knn_search(node, targett, k, sorted) result(query)
+    subroutine knn_search(node, targett, k, points, q_idx, q_dist, sorted)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         implicit none
         !in
         integer, intent(in) :: k
+        real(kind=prec), intent(in) :: points(:, :)
         type(KDTreeNode), pointer, intent(in) :: node
         real(kind=prec), intent(in) :: targett(ndim)
         logical, intent(in), optional :: sorted
         !out
-        real(kind=prec):: dist(k)
-        integer(kind=intkind) :: idx(k)
-        type(KDTreeResult) :: query
+        real(kind=prec), intent(inout):: q_dist(k)
+        integer(kind=intkind), intent(inout) :: q_idx(k)
 
-        dist = HUGE(0.0)
-        idx = -1
+        q_dist = HUGE(0.0)
+        q_idx = -1
 
-        ! bbox prunning does not work with PBC's
-#if periodic == 0
-        call knn_search_queue(node, targett, idx, dist, k)
-#else   
-        call knn_search_recursive_hyperp(node, targett, idx, dist, k)
-#endif
+        call knn_search_recursive_hyperp(node, targett, points, q_idx, q_dist, k)
 
         !Perform full sort with quicksort
         ! by default, sorts
         if ( present(sorted) ) then 
             if (sorted) then
-                call quicksort(dist, idx, k)
+                call quicksort(q_dist, q_idx, k)
             end if
         else
-            call quicksort(dist, idx, k)
+            call quicksort(q_dist, q_idx, k)
         endif
 
-        query%idx = idx
-        query%dist = sqrt(dist)
+        q_dist = sqrt(q_dist)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    endfunction knn_search
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! k-nearest neighbor search with priority queue and bounding box checks
-    ! Leverages a combined max-heap and min-heap for efficient search
-    ! (non periodic)
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine knn_search_queue(root_node, targett, idx, dist, k)
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    implicit none
-    !in
-    integer :: k ! Number of nearest neighbors to find
-    type(KDTreeNode), pointer, intent(in) :: root_node ! root node
-    real(kind=prec), intent(inout) :: dist(k)  
-    integer(kind=intkind), intent(inout) :: idx(k) 
-    real(kind=prec), intent(in) :: targett(ndim) ! Target point (k-D)  
-    !local
-    integer :: i
-    !min-heap priority queue
-    integer :: Nqueue ! Number of nodes in the queue
-    integer :: Nstack, Nstack2 !stack for queue
-    type(KDTreeNode), pointer :: node
-    type(node_queue), allocatable :: queue(:), tmp_queue(:)
-    real(kind=prec), allocatable :: nodes_mindist(:), tmp_nodes_mindist(:) 
-    real(kind=prec) :: mindistkd, dist_furthest, mindistkd_right, mindistkd_left
-    real(kind=prec):: dist_current
-    real(kind=prec):: temp_point(ndim)
-
-
-    ! Allocate queue with initial stack size
-    Nstack = 100
-    allocate(queue(Nstack))
-    allocate(nodes_mindist(Nstack))
-    nodes_mindist(:) = HUGE(0.0)
-
-    !first element to visit: root node
-    Nqueue = 1
-    queue(1)%node => root_node
-    call bbox_mindist_kd(root_node%minbounds, root_node%maxbounds, targett, mindistkd)
-    nodes_mindist(1) = mindistkd
-
-    !########################################
-    do while (Nqueue > 0) ! Priority search
-    !########################################
-
-        ! Stack resize if priority queue is almost full (and thus children may overflow it)
-        if (Nqueue > Nstack - 1) then
-            ! Reallocate properly
-            Nstack2 = 10 * Nstack
-            allocate(tmp_queue(Nstack2))
-            allocate(tmp_nodes_mindist(Nstack2))
-            tmp_nodes_mindist(1:Nstack) = nodes_mindist(1:Nstack)
-            do i = 1, Nstack
-                tmp_queue(i)%node => queue(i)%node
-            end do
-            call move_alloc(tmp_queue, queue)
-            call move_alloc(tmp_nodes_mindist, nodes_mindist)
-            Nstack = Nstack2
-        end if
-
-        !node processing, retrieve it, pop it and restore min-heap
-        node => queue(1)%node
-        mindistkd = nodes_mindist(1)
-        !move last to the first position
-        queue(1)%node => queue(Nqueue)%node
-        nodes_mindist(1) = nodes_mindist(Nqueue)
-        Nqueue = Nqueue - 1
-        if (Nqueue > 1) then
-            call min_heap_queue_down(queue(1:Nqueue), nodes_mindist(1:Nqueue), Nqueue)
-        end if
-
-        if (.not. associated(node)) then
-            cycle
-        end if
-    
-        ! Furthest "nearest-neighbor" distance found so far
-        dist_furthest = dist(1)
-
-        ! early exit
-        if (mindistkd > dist_furthest) then
-            cycle
-        end if
-
-        !check if leaf, otherwise push promising children
-        if (node%is_leaf .eqv. .false.) then
-
-            call bbox_mindist_kd(node%left%minbounds, node%left%maxbounds, &
-                                    targett, mindistkd_left)
-            call bbox_mindist_kd(node%right%minbounds, node%right%maxbounds, &
-                                    targett, mindistkd_right)
-            
-            ! Push LEFT child 
-            if (mindistkd_left <= dist_furthest) then
-                Nqueue = Nqueue + 1
-                queue(Nqueue)%node => node%left
-                nodes_mindist(Nqueue) = mindistkd_left
-                call min_heap_queue_up(queue(1:Nqueue), nodes_mindist(1:Nqueue), Nqueue)
-            end if
-
-            ! Push RIGHT child
-            if (mindistkd_right <= dist_furthest) then
-                Nqueue = Nqueue + 1
-                queue(Nqueue)%node => node%right
-                nodes_mindist(Nqueue) = mindistkd_right
-                call min_heap_queue_up(queue(1:Nqueue), nodes_mindist(1:Nqueue), Nqueue)
-            end if
-
-        ! If it is a leaf, then search all points and use max_heap
-        ! to keep track of candidates
-        else if (node%is_leaf .eqv. .true.) then
-
-            ! Check all points in the leaf with brute force
-            do i = 1, size(node%leaf_indices)
-                temp_point = node%leaf_points(:, i)
-                dist_current = distance(temp_point, targett)
-                ! If the current point is closer than the furthest, replace it
-                if (dist_current < dist_furthest) then
-                    dist(1) = dist_current
-                    idx(1) = node%leaf_indices(i)
-                    call max_heap_insert(dist, idx, k)
-                    dist_furthest = dist(1)
-                end if
-            end do
-
-        end if !node%is_leaf
-
-    !##################################
-    end do ! Priority search
-    !##################################
-
-    deallocate(queue, nodes_mindist)
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end subroutine knn_search_queue
+    end subroutine knn_search
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-!     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-!     ! Hyperplane method with early bbox prunning (just a bit faster than pure hyperplane)
-!     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-!     recursive subroutine knn_search_recursive_hybrid(node, targett, idx, dist, k)
-!     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-!         implicit none
-!         !in
-!         integer :: k ! Number of nearest neighbors to find
-!         type(KDTreeNode), pointer, intent(in) :: node ! Starting node (usually the root)
-!         real(kind=prec), intent(in) :: targett(ndim) ! Target point (k-D)  
-!         !local
-!         real(kind=prec), intent(inout) :: dist(k)  
-!         integer(kind=intkind), intent(inout) :: idx(k) 
-!         integer :: i ! Index running over leaf points
-!         real(kind=prec):: dist_current, dist_furthest, d1d
-!         integer :: axis
-!         logical :: look_opposite
-!         real(kind=prec) :: mindist(ndim) ! Minimum distance to bbox in each dimension
-!         real(kind=prec) :: maxdist(ndim) ! Maximum distance to bbox
-!         real(kind=prec) :: mindist3D, maxdist3D
-!         real(kind=prec):: temp_point(ndim)
-
-!         if (.not. associated(node)) then
-!             return
-!         end if
-
-!         ! Early exit
-!         dist_furthest = dist(1)
-
-!         mindist = 0.0_prec
-!         maxdist = 0.0_prec
-!         do i = 1, ndim
-!             call bbox_distance_1D(node%minbounds, node%maxbounds, targett, mindist, maxdist, i)
-!         end do
-
-!         mindist3D = sum(mindist**2)
-!         maxdist3D = sum(maxdist**2)
-
-!         if (mindist3D > dist_furthest) then
-!             return
-!         end if
-
-!         ! First, check if it is a leaf node
-!         if (node%is_leaf .eqv. .true.) then
-!             dist_furthest = dist(1)
-!             ! Check all points in the leaf with brute force
-!             do i = 1, size(node%leaf_indices)
-!                 temp_point = node%leaf_points(:, i)
-!                 dist_current = distance(temp_point, targett)
-!                 ! If the current point is closer than the furthest, replace it
-!                 if (dist_current < dist_furthest) then
-!                     dist(1) = dist_current
-!                     idx(1) = node%leaf_indices(i)
-!                     call max_heap_insert(dist, idx, k)
-!                     dist_furthest = dist(1)
-!                 end if
-!             end do
-
-!         else 
-
-!             axis = node%axis
-!             ! 1D distance from target to the splitting plane
-!             d1d = targett(axis) - node%point(axis)
-
-!             ! Recursively search the subtree that contains the target
-!             if (d1d < 0) then
-!                 call knn_search_recursive_hybrid(node%left, targett, idx, dist, k)
-!                 dist_furthest = dist(1)
-!                 !Check if we need to search the right subtree 
-!                 look_opposite = .false.
-!                 if (d1d**2 < dist_furthest) look_opposite = .true.
-! #if periodic == 1
-!                 if (targett(axis) - dist_furthest <= -L(axis) / 2. ) look_opposite = .true.
-! #endif
-!                 if (look_opposite .eqv. .true.) then
-!                     call knn_search_recursive_hybrid(node%right, targett, idx, dist, k)
-!                 end if
-!             else
-!                 call knn_search_recursive_hybrid(node%right, targett, idx, dist, k)
-!                 dist_furthest = dist(1)
-!                 !Check if we need to search the left subtree
-!                 look_opposite = .false.
-!                 if (d1d**2 < dist_furthest) look_opposite = .true.
-! #if periodic == 1
-!                 if (targett(axis) + dist_furthest >= L(axis) / 2. ) look_opposite = .true.
-! #endif
-!                 if (look_opposite .eqv. .true.) then
-!                     call knn_search_recursive_hybrid(node%left, targett, idx, dist, k)
-!                 end if
-!             end if
-
-!         end if !node%is_leaf
-       
-!     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-!     end subroutine knn_search_recursive_hybrid
-!     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! Standard hyperplane method to find k-nearest neighbors (SIMPLEST)
     ! Just slightly slower than queue bbox version at large k
     ! Can be faster, depending on the case, for small k
     ! (periodicity available)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    recursive subroutine knn_search_recursive_hyperp(node, targett, idx, dist, k)
+    recursive subroutine knn_search_recursive_hyperp(node, targett, points, q_idx, q_dist, k)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         implicit none
         !in
         integer :: k ! Number of nearest neighbors to find
         type(KDTreeNode), pointer, intent(in) :: node ! root node
+        real(kind=prec), intent(in) :: points(:, :)
         real(kind=prec), intent(in) :: targett(ndim) ! Target point (k-D)  
         !local
-        real(kind=prec), intent(inout) :: dist(k)  
-        integer(kind=intkind), intent(inout) :: idx(k) 
-        integer :: i ! Index running over leaf points
+        real(kind=prec), intent(inout) :: q_dist(k)  
+        integer(kind=intkind), intent(inout) :: q_idx(k) 
+        integer(kind=intkind) :: i ! Index running over leaf points
         real(kind=prec):: dist_current, dist_furthest, d1d
         integer :: axis
+        integer(kind=intkind) :: startidx, endidx
         logical :: look_opposite
         real(kind=prec):: temp_point(ndim)
 
@@ -799,17 +486,19 @@ contains
 
         ! check if it is leaf
         if (node%is_leaf .eqv. .true.) then
-            dist_furthest = dist(1)
+            dist_furthest = q_dist(1)
+            startidx = node%start_idx
+            endidx = node%end_idx
             ! brute-force
-            do i = 1, size(node%leaf_indices)
-                temp_point = node%leaf_points(:, i)
+            do i = startidx, endidx
+                temp_point(1:3) = points(1:3, i)
                 dist_current = distance(temp_point, targett)
                 !add new (better) candidates
                 if (dist_current < dist_furthest) then
-                    dist(1) = dist_current
-                    idx(1) = node%leaf_indices(i)
-                    call max_heap_insert(dist, idx, k)
-                    dist_furthest = dist(1)
+                    q_dist(1) = dist_current
+                    q_idx(1) = i
+                    call max_heap_insert(q_dist, q_idx, k)
+                    dist_furthest = q_dist(1)
                 end if
             end do
 
@@ -821,8 +510,8 @@ contains
 
             ! Recursively search the subtree that contains the target
             if (d1d < 0) then
-                call knn_search_recursive_hyperp(node%left, targett, idx, dist, k)
-                dist_furthest = dist(1)
+                call knn_search_recursive_hyperp(node%left, targett, points, q_idx, q_dist, k)
+                dist_furthest = q_dist(1)
                 !check if we need to search the other subtree
                 look_opposite = .false.
                 if (d1d**2 < dist_furthest) look_opposite = .true.
@@ -830,11 +519,11 @@ contains
                 if (targett(axis) - sqrt(dist_furthest) <= -L(axis) / 2. ) look_opposite = .true.
 #endif
                 if (look_opposite .eqv. .true.) then
-                    call knn_search_recursive_hyperp(node%right, targett, idx, dist, k)
+                    call knn_search_recursive_hyperp(node%right, targett, points, q_idx, q_dist, k)
                 end if
             else
-                call knn_search_recursive_hyperp(node%right, targett, idx, dist, k)
-                dist_furthest = dist(1)
+                call knn_search_recursive_hyperp(node%right, targett, points, q_idx, q_dist, k)
+                dist_furthest = q_dist(1)
                 !check if we need to search the other subtree
                 look_opposite = .false.
                 if (d1d**2 < dist_furthest) look_opposite = .true.
@@ -842,7 +531,7 @@ contains
                 if (targett(axis) + sqrt(dist_furthest) >= L(axis) / 2. ) look_opposite = .true.
 #endif
                 if (look_opposite .eqv. .true.) then
-                    call knn_search_recursive_hyperp(node%left, targett, idx, dist, k)
+                    call knn_search_recursive_hyperp(node%left, targett, points, q_idx, q_dist, k)
                 end if
             end if
 
@@ -856,13 +545,13 @@ contains
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! Max-heap routine to insert new nearest neighbour candidates from the top
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine max_heap_insert(dist, idx, k)
+    subroutine max_heap_insert(q_dist, q_idx, k)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         implicit none
         ! Inputs
         integer, intent(in) :: k
-        real(kind=prec), intent(inout) :: dist(k)
-        integer(kind=intkind), intent(inout) :: idx(k)
+        real(kind=prec), intent(inout) :: q_dist(k)
+        integer(kind=intkind), intent(inout) :: q_idx(k)
         ! Local
         integer :: i, largest, left, right
         real(kind=prec) :: tmp_dist
@@ -879,21 +568,21 @@ contains
             largest = i
     
             if (left <= k) then
-                if (dist(left) > dist(largest)) largest = left
+                if (q_dist(left) > q_dist(largest)) largest = left
             end if
             if (right <= k) then
-                if (dist(right) > dist(largest)) largest = right
+                if (q_dist(right) > q_dist(largest)) largest = right
             end if
     
             if (largest /= i) then
                 !swap to correct position
-                tmp_dist = dist(i)
-                dist(i) = dist(largest)
-                dist(largest) = tmp_dist
+                tmp_dist = q_dist(i)
+                q_dist(i) = q_dist(largest)
+                q_dist(largest) = tmp_dist
     
-                tmp_idx = idx(i)
-                idx(i) = idx(largest)
-                idx(largest) = tmp_idx
+                tmp_idx = q_idx(i)
+                q_idx(i) = q_idx(largest)
+                q_idx(largest) = tmp_idx
     
                 i = largest
 
@@ -906,241 +595,50 @@ contains
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 
 
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! Min-heap routine to restore the heap property from the top according to nodes_mindist
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine min_heap_queue_down(queue, nodes_mindist, k)
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        implicit none
-        ! Inputs
-        integer, intent(in) :: k
-        real(kind=prec), intent(inout) :: nodes_mindist(k)
-        type(node_queue), intent(inout) :: queue(k)
-        ! Local
-        integer :: i, smallest, left, right
-        real(kind=prec) :: tmp_dist
-        type(KDTreeNode), pointer :: tmp_ptr
-    
-        ! The new value has replaced the root value (min) at index 1
-        ! queue(1), nodes_mindist(1)
-
-        ! Heapify DOWN from root to restore min-heap property (every parent smaller than its children)
-        i = 1
-        do
-            left = 2 * i
-            right = 2 * i + 1
-            smallest = i
-    
-            if (left <= k) then
-                if (nodes_mindist(left) < nodes_mindist(smallest)) smallest = left
-            end if
-            if (right <= k) then
-                if (nodes_mindist(right) < nodes_mindist(smallest)) smallest = right
-            end if
-    
-            if (smallest /= i) then
-                !swap to correct position
-                tmp_dist = nodes_mindist(i)
-                nodes_mindist(i) = nodes_mindist(smallest)
-                nodes_mindist(smallest) = tmp_dist
-                
-                tmp_ptr => queue(i)%node
-                queue(i)%node => queue(smallest)%node
-                queue(smallest)%node => tmp_ptr
-    
-                i = smallest
-
-            else !already fulfills min-heap property
-                exit
-            end if
-        end do
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end subroutine min_heap_queue_down
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
-
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! Min-heap routine to restore the heap property from the bottom according to nodes_mindist
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine min_heap_queue_up(queue, nodes_mindist, k)
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        implicit none
-        ! Inputs
-        integer, intent(in) :: k
-        real(kind=prec), intent(inout) :: nodes_mindist(k)
-        type(node_queue), intent(inout) :: queue(k)
-        ! Local
-        integer :: i, father, largest
-        real(kind=prec) :: tmp_dist
-        type(KDTreeNode), pointer :: tmp_ptr
-    
-        ! The new value has replaced the last value at index k
-        ! queue(k), nodes_mindist(k)
-
-        ! Heapify UP from last to root to restore min-heap property (every parent smaller than its children)
-        i = k
-        do
-            father = i / 2
-            largest = i
-            
-            if (father >= 1) then
-                if (nodes_mindist(father) > nodes_mindist(largest)) largest = father
-            end if
-
-            if (largest /= i) then
-                !swap to correct position
-                tmp_dist = nodes_mindist(i)
-                nodes_mindist(i) = nodes_mindist(largest)
-                nodes_mindist(largest) = tmp_dist
-                
-                tmp_ptr => queue(i)%node
-                queue(i)%node => queue(largest)%node
-                queue(largest)%node => tmp_ptr
-    
-                i = largest
-
-            else !already fulfills min-heap property
-                exit
-            end if
-            
-        end do
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end subroutine min_heap_queue_up
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
-
-
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ! Search for points within a given radius using bounding box pruning
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    function ball_search(node, targett, radius, sorted) result(query)
+    subroutine ball_search(node, targett, radius, points, max_size, q_idx, q_dist, count, sorted)
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     implicit none
     !in
-    real(kind=prec):: radius !ball radius
+    real(kind=prec), intent(in) :: radius !ball radius
     type(KDTreeNode), pointer, intent(in) :: node
     real(kind=prec), intent(in) :: targett(ndim)
-    logical, intent(in), optional :: sorted 
-    !local
-    integer :: max_size
-    integer :: count
-    integer(kind=intkind), allocatable :: temp_idx(:)
-    real(kind=prec), allocatable :: temp_dist(:)
+    real(kind=prec), intent(in) :: points(:, :)
+    logical, intent(in), optional :: sorted
+    !inout
+    integer, intent(inout) :: max_size
+    real(kind=prec), allocatable, intent(inout) :: q_dist(:)
+    integer(kind=intkind), allocatable, intent(inout) :: q_idx(:)
     !out
-    real(kind=prec), allocatable :: dist(:)
-    integer(kind=intkind), allocatable :: idx(:)
-    type(KDTreeResult) :: query
-
-    !initial buffer for neighbors
-    !later reallocated if necessary
-    max_size = 100
-    allocate(dist(max_size)) 
-    allocate(idx(max_size))
-    dist = 0
-    idx = 0
+    integer, intent(out) :: count
+    
+    !result buffers allocated
+    if (.not. allocated(q_dist)) allocate(q_dist(max_size))
+    if (.not. allocated(q_idx)) allocate(q_idx(max_size))
+        
     count = 0
 
-     !same as KNN, bbox prunning does not work with PBC's
-#if periodic == 0
-    call ball_search_recursive_bbox(node, targett, dist, idx, count, radius)
-#else
-    call ball_search_recursive_hyperp(node, targett, dist, idx, count, radius)
-#endif
-  
-    if (count == 0) then
-        temp_dist = dist(1:0)
-        call move_alloc(temp_dist, dist)
-        temp_idx = idx(1:0)
-        call move_alloc(temp_idx, idx)
+    call ball_search_recursive_hyperp(node, targett, points, q_idx, q_dist, count, radius)
 
-    else
-        ! Reallocation to the correct size
-        temp_dist = dist(1:count)
-        call move_alloc(temp_dist, dist)
-        temp_idx = idx(1:count)
-        call move_alloc(temp_idx, idx)
-        ! Last step, sort the distances (slightly decreases performance)
+    if (count > 0) then
         if ( present(sorted) ) then 
-            if (sorted) then
-                call quicksort(dist, idx, count)
-            end if
+            if (sorted) call quicksort(q_dist, q_idx, count)
         endif
+        q_dist(1:count) = sqrt(q_dist(1:count))
     end if
 
-    query%idx = idx
-    query%dist = sqrt(dist)
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end function ball_search
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    max_size = size(q_dist)
 
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	
-    recursive subroutine ball_search_recursive_bbox(node, targett, dist, idx, count, radius)
-    ! This version uses bounding boxes to prune the search
-    ! For large R is faster than the hyperplane version
-    ! For small-moderate R is similar to the hyperplane version or just a bit slower
-    ! Periodicity not available
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	
-        implicit none
-        !in
-        real(kind=prec):: radius
-        type(KDTreeNode), pointer, intent(in) :: node ! root node
-        real(kind=prec), intent(in) :: targett(ndim) 
-        !out
-        integer(kind=intkind), allocatable, intent(inout) :: idx(:) 
-        real(kind=prec), allocatable, intent(inout) :: dist(:)
-        integer, intent(inout) :: count
-        !local
-        real(kind=prec) :: mindist(ndim), maxdist(ndim)
-        real(kind=prec) :: mindist3D, maxdist3D
-        integer :: i
-        real(kind=prec):: dist_current
-        real(kind=prec) :: temp_point(ndim)
-
-        if (.not. associated(node)) then
-            return
-        end if
-
-        mindist = 0.0_prec
-        maxdist = 0.0_prec
-        do i = 1, ndim
-            call bbox_distance_1D(node%minbounds, node%maxbounds, targett, mindist, maxdist, i)
-        end do
-
-        mindist3D = sum(mindist**2)
-        maxdist3D = sum(maxdist**2)
-
-        !early prunning
-        if (mindist3D > radius**2) then
-            return
-            
-        !completely inside the ball
-        else if (maxdist3D <= radius**2) then
-            call ball_reduction_recursive(node, targett, dist, idx, count)
-            return
-        end if
-
-        !if neither of the above then proceed with leaf or next levels
-        if (node%is_leaf) then
-            do i = 1, size(node%leaf_indices)
-                temp_point = node%leaf_points(:, i)
-                dist_current = distance(temp_point, targett)
-                if ( dist_current <= radius**2) then
-                    call add_to_list(idx, dist, node%leaf_indices(i), dist_current, count)
-                end if
-            end do
-
-        ! Then check which childs to visit
-        else
-            call ball_search_recursive_bbox(node%left, targett, dist, idx, count, radius)
-            call ball_search_recursive_bbox(node%right, targett, dist, idx, count, radius)
-
-        endif
+    !do not resize, do not touch the buffer
 
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end subroutine ball_search_recursive_bbox
+    end subroutine ball_search
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	
-    recursive subroutine ball_search_recursive_hyperp(node, targett, dist, idx, count, radius)
+    recursive subroutine ball_search_recursive_hyperp(node, targett, points, q_idx, q_dist, count, radius)
     ! This versions uses hyperplanes to prune the search
     ! For moderate R is as fast or just a bit faster than the bbox version
     ! For large R is x1.5-2 slower than the bbox version
@@ -1151,14 +649,16 @@ contains
         real(kind=prec):: radius 
         type(KDTreeNode), pointer, intent(in) :: node ! Starting node (usually the root)
         real(kind=prec), intent(in) :: targett(ndim) 
+        real(kind=prec), intent(in) :: points(:, :)
         !out
-        integer(kind=intkind), allocatable, intent(inout) :: idx(:) 
-        real(kind=prec), allocatable, intent(inout) :: dist(:)
+        integer(kind=intkind), allocatable, intent(inout) :: q_idx(:) 
+        real(kind=prec), allocatable, intent(inout) :: q_dist(:)
         integer, intent(inout) :: count
         !local
-        integer :: i
+        integer(kind=intkind) :: i
         real(kind=prec):: dist_current, d1d
         integer :: axis
+        integer(kind=intkind) :: startidx, endidx
         logical :: look_opposite 
         real(kind=prec) :: temp_point(ndim)
 
@@ -1169,12 +669,14 @@ contains
         ! check if it is leaf
         if (node%is_leaf .eqv. .true.) then
             ! brute-force
-            do i = 1, size(node%leaf_indices)
-                temp_point = node%leaf_points(:, i)
+            startidx = node%start_idx
+            endidx = node%end_idx
+            do i = startidx, endidx
+                temp_point(1:3) = points(1:3, i)
                 dist_current = distance(temp_point, targett)
                 if ( dist_current <= radius**2) then
                     ! append new neighbors
-                    call add_to_list(idx, dist, node%leaf_indices(i), dist_current, count)
+                    call add_to_list(q_idx, q_dist, i, dist_current, count)
                 end if
             end do
 
@@ -1184,7 +686,7 @@ contains
             d1d = targett(axis) - node%point
             ! Recursively search the subtree that contains the target
             if (d1d < 0) then
-                call ball_search_recursive_hyperp(node%left, targett, dist, idx, count, radius)
+                call ball_search_recursive_hyperp(node%left, targett, points, q_idx, q_dist, count, radius)
                 !check if we need to search the other subtree
                 look_opposite = .false.
                 if (abs(d1d) <= radius) look_opposite = .true.
@@ -1192,10 +694,10 @@ contains
                 if (targett(axis) - radius <= -L(axis) / 2. ) look_opposite = .true.
 #endif
                 if (look_opposite .eqv. .true.) then
-                    call ball_search_recursive_hyperp(node%right, targett, dist, idx, count, radius)
+                    call ball_search_recursive_hyperp(node%right, targett, points, q_idx, q_dist, count, radius)
                 end if
             else
-                call ball_search_recursive_hyperp(node%right, targett, dist, idx, count, radius)
+                call ball_search_recursive_hyperp(node%right, targett, points, q_idx, q_dist, count, radius)
                 look_opposite = .false.
                 !check if we need to search the other subtree
                 if (abs(d1d) <= radius) look_opposite = .true.
@@ -1203,7 +705,7 @@ contains
                 if (targett(axis) + radius >= L(axis) / 2. ) look_opposite = .true.
 #endif
                 if (look_opposite .eqv. .true.) then
-                    call ball_search_recursive_hyperp(node%left, targett, dist, idx, count, radius)
+                    call ball_search_recursive_hyperp(node%left, targett, points, q_idx, q_dist, count, radius)
                 end if
             end if
 
@@ -1212,226 +714,37 @@ contains
     end subroutine ball_search_recursive_hyperp
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! Search for points within a given box (cuboid) aligned with cartesian axes
-    ! Only returns indices, distances do not make sense
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    function box_search(node, box) result(query)
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        implicit none
-        !in
-        real(kind=prec) :: box(2*ndim) ! Box limits (xmin, xmax, ymin, ymax, zmin, zmax,...)
-        type(KDTreeNode), pointer, intent(in) :: node
-        !local
-        integer :: count_idx 
-        integer(kind=intkind), allocatable :: temp_idx(:)
-        !out
-        integer(kind=intkind), allocatable :: idx(:)
-        type(KDTreeResult) :: query
-    
-        !init buffer
-        allocate(idx(1000))
-        idx = -1
-        count_idx = 0
-    
-        call box_search_recursive(node, idx, box, count_idx)
-            
-        !reallocate to proper size
-        if (count_idx == 0) then
-            temp_idx = idx(1:0)
-            call move_alloc(temp_idx, idx)
-        else
-            temp_idx = idx(1:count_idx)
-            call move_alloc(temp_idx, idx)
-        end if
-
-        query%idx = idx
-
-        deallocate(idx)
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end function box_search
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~   
-
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	
-    recursive subroutine box_search_recursive(node, idx, box, count_idx)
-    ! Since only bbox comparisons are needed, this routine is extremely fast
-    ! Box assumed to be contained in the root node bounding box -> periodicity does not make sense
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	
-        implicit none
-        !in
-        real(kind=prec) :: box(2*ndim) ! Box limits (xmin, xmax, ymin, ymax, zmin, zmax,...)
-        type(KDTreeNode), pointer, intent(in) :: node !root node
-        !out
-        integer(kind=intkind), allocatable, intent(inout) :: idx(:) 
-        integer, intent(inout) :: count_idx
-        !local
-        integer :: i
-        logical :: in_box
-        integer :: axis
-        real(kind=prec):: temp_point(ndim)
-
-        if (.not. associated(node)) then
-            return
-        end if
-
-        ! check if it is leaf
-        if (node%is_leaf .eqv. .true.) then
-            !brute-force
-            do i = 1, size(node%leaf_indices)
-                temp_point = node%leaf_points(:, i)
-                call is_in_box(temp_point, box, in_box)
-                if ( in_box .eqv. .true. ) then
-                    ! append new neighbors
-                    call int_add_to_list(idx, node%leaf_indices(i), count_idx)
-                end if
-            end do
-
-        else
-
-            axis = node%axis
-
-            ! Recursively search the subtrees intersecting the box
-            if (box(2*axis-1) < node%point) then
-                call box_search_recursive(node%left, idx, box, count_idx)
-            endif
-
-            if (box(2*axis) > node%point) then
-                call box_search_recursive(node%right, idx, box, count_idx)
-            endif
-
-        endif !node%is_leaf
-
-    contains
-
-        !subroutine to check if a point is inside the query box
-        subroutine is_in_box(point, box, in_box)
-            implicit none
-            real(kind=prec), intent(in) :: point(ndim) 
-            real(kind=prec), intent(in) :: box(2*ndim) 
-            logical, intent(out) :: in_box 
-            !local
-            integer :: j
-
-            in_box = .true.
-            do j=1,ndim
-                if (point(j) < box(2*j-1) .or. point(j) > box(2*j)) then
-                    in_box = .false.
-                    return
-                end if
-            end do
-
-        end subroutine is_in_box
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end subroutine box_search_recursive
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	
-    recursive subroutine ball_reduction_recursive(node, targett, dist, idx, count)
-    !Function that returns all indices and distances of points within a given node
-    !Used when ball_search checks that a node and all its children are fully inside the search ball
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	
-        implicit none
-        !in
-        type(KDTreeNode), pointer, intent(in) :: node 
-        real(kind=prec), intent(in) :: targett(ndim) 
-        !out
-        integer(kind=intkind), allocatable, intent(inout) :: idx(:) 
-        real(kind=prec), allocatable, intent(inout) :: dist(:)
-        integer, intent(inout) :: count
-        !local
-        real(kind=prec):: dist_current
-        integer :: i
-        real(kind=prec):: temp_point(ndim)
-
-        if (.not. associated(node)) then
-            return
-        end if
-
-        if (node%is_leaf .eqv. .true.) then
-            do i = 1, size(node%leaf_indices)
-                temp_point = node%leaf_points(:, i)
-                dist_current = distance(temp_point, targett)
-                call add_to_list(idx, dist, node%leaf_indices(i), dist_current, count)
-            end do
-
-        else
-            call ball_reduction_recursive(node%left, targett, dist, idx, count)
-            call ball_reduction_recursive(node%right, targett, dist, idx, count)
-        endif 
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    end subroutine ball_reduction_recursive
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
+ 
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     !subroutines to append an element to an array, called by BALL_SEARCH and BOX_SEARCH
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine int_add_to_list(idx, new_value, count)
+    subroutine add_to_list(q_idx, q_dist, idx_new, dist_new, count)
         implicit none
-        integer(kind=intkind), allocatable, intent(inout) :: idx(:)
-        integer(kind=intkind), intent(in) :: new_value
-        integer, intent(inout) :: count 
-        integer(kind=intkind), allocatable :: temp(:)
-        integer :: n
-
-        if (count >= size(idx)) then
-            ! Resize the array
-            n = size(idx)
-            allocate(temp(10 * n))
-            temp(1:n) = idx
-            call move_alloc(temp, idx)
-        end if
-
-        count = count + 1
-        idx(count) = new_value 
-
-    end subroutine int_add_to_list
-
-
-    subroutine add_to_list(idx, dist, idx_new, dist_new, count)
-        implicit none
-        integer(kind=intkind), allocatable, intent(inout) :: idx(:)
+        integer(kind=intkind), allocatable, intent(inout) :: q_idx(:)
+        real(kind=prec), allocatable, intent(inout) :: q_dist(:)
         integer(kind=intkind), intent(in) :: idx_new
-        real(kind=prec), allocatable, intent(inout) :: dist(:)
         real(kind=prec), intent(in) :: dist_new
         integer, intent(inout) :: count
         integer(kind=intkind), allocatable :: temp_idx(:)
         real(kind=prec), allocatable :: temp_dist(:)
         integer :: n
 
-        if (count >= size(idx)) then
+        if (count >= size(q_idx)) then
             ! Resize the array
-            n = size(idx)
-            allocate(temp_idx(10 * n))
-            allocate(temp_dist(10 * n))
-            temp_idx(1:n) = idx
-            temp_dist(1:n) = dist
-            call move_alloc(temp_idx, idx)
-            call move_alloc(temp_dist, dist)
+            n = size(q_idx)
+            allocate(temp_idx(2 * n))
+            allocate(temp_dist(2 * n))
+            temp_idx(1:n) = q_idx
+            temp_dist(1:n) = q_dist
+            call move_alloc(temp_idx, q_idx)
+            call move_alloc(temp_dist, q_dist)
         end if
 
         count = count + 1
-        idx(count) = idx_new
-        dist(count) = dist_new
+        q_idx(count) = idx_new
+        q_dist(count) = dist_new
         
     end subroutine add_to_list
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! Query destructor to free the memory of the results
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine deallocate_query(query)
-        implicit none
-        type(KDTreeResult), intent(inout) :: query
-
-        if (allocated(query%idx)) deallocate(query%idx)
-        if (allocated(query%dist)) deallocate(query%dist)
-
-    end subroutine deallocate_query
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1485,68 +798,6 @@ contains
     end function distance_1D
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! Minimum and maximum distance between box and point
-    ! Uses distance_1D
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine bbox_distance_1D(minbounds, maxbounds, point, mindist, maxdist, dim)
-        implicit none
-        real(kind=prec), intent(in) :: minbounds(ndim), maxbounds(ndim)
-        real(kind=prec), intent(in) :: point(ndim)
-        real(kind=prec), intent(inout) :: mindist(ndim), maxdist(ndim)
-        integer, intent(in) :: dim
-        real(kind=prec):: dmin, dmax
-
-        ! Minimum distance
-        if (point(dim) < minbounds(dim)) then
-            dmin = distance_1D(point(dim), minbounds(dim), dim)
-        else if (point(dim) > maxbounds(dim)) then
-            dmin = distance_1D(point(dim), maxbounds(dim), dim)
-        else
-            dmin = 0.
-        end if
-
-        ! Maximum distance
-        dmax = max( distance_1D(point(dim), minbounds(dim), dim), &
-                    distance_1D(point(dim), maxbounds(dim), dim) )
-
-        mindist(dim) = dmin
-        maxdist(dim) = dmax
-        
-    end subroutine bbox_distance_1D
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ! Minimum k-d distance between box and point
-    ! Uses distance_1D
-    ! Used in knn search for the priority queue and prunnning
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    subroutine bbox_mindist_kd(minbounds, maxbounds, point, mindistkd)
-        implicit none
-        real(kind=prec), intent(in) :: minbounds(ndim), maxbounds(ndim)
-        real(kind=prec), intent(in) :: point(ndim)
-        real(kind=prec), intent(inout) :: mindistkd
-        integer :: dim
-        real(kind=prec):: dmin
-
-        mindistkd = 0.
-        do dim = 1, ndim
-            ! Minimum distance along this dimension
-            if (point(dim) < minbounds(dim)) then
-                dmin = distance_1D(point(dim), minbounds(dim), dim)
-            else if (point(dim) > maxbounds(dim)) then
-                dmin = distance_1D(point(dim), maxbounds(dim), dim)
-            else
-                dmin = 0.
-            end if
-            mindistkd = mindistkd + dmin**2
-        end do
-
-    end subroutine bbox_mindist_kd
-    !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     !Quicksort algorithm for sorting FINAL RESULTS
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1642,8 +893,6 @@ contains
         idx(j) = temp_idx
     end subroutine swap2
     !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
 
 !#######################################################
 end module cosmokdtree

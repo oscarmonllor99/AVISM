@@ -273,7 +273,7 @@ CONTAINS
 
 
 !********************************************************************************  
-   SUBROUTINE H_DISTANCE(KNEIGHBOURS,NX,NY,NZ,NPARTT,TREE,SMASK,HPART)
+   SUBROUTINE H_DISTANCE(KNEIGHBOURS,NX,NY,NZ,NPARTT,TREE,TREEPOINTS,TREEIDX,SMASK,HPART)
    !this subroutine calculates the kernel distance h(x) for every cell x
    !required by DDENS_INTERP_SPH if VVEL_INTERP_SPH is not used
 !********************************************************************************  
@@ -282,10 +282,12 @@ CONTAINS
 
          IMPLICIT NONE
          !input variables
-         INTEGER KNEIGHBOURS
+         INTEGER KNEIGHBOURS, BUFF, CONTA
          INTEGER NX,NY,NZ
-         INTEGER(KIND=8) :: NPARTT, CONTA, I, BUFF
+         INTEGER(KIND=8) :: NPARTT, I, P
          INTEGER*1 :: SMASK(:,:,:)
+         REAL*4 :: TREEPOINTS(3,NPARTT)
+         INTEGER(KIND=8) :: TREEIDX(NPARTT)
 
          !LOCAL
          INTEGER :: IX,JY,KZ
@@ -296,21 +298,21 @@ CONTAINS
          
          !query
          type(KDTreeNode), pointer :: TREE
-         type(KDTreeResult) :: QUERY
-         REAL*4 :: TAR(3)
+         REAL*4 :: TAR(3), D
+         
          !SPH related
          REAL*4 :: HPART(NPARTT)
 
          !$OMP PARALLEL SHARED(KNEIGHBOURS,NX,NY,NZ,SMASK, &
-         !$OMP                   TREE,DX,DY,DZ,RADX,RADY,RADZ,HPART) &
-         !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,NEIGH,CONTA,BUFF), &
+         !$OMP                   TREE,TREEPOINTS,TREEIDX,DX,DY,DZ,RADX,RADY,RADZ,HPART) &
+         !$OMP PRIVATE(I,IX,JY,KZ,TAR,DIST,NEIGH,CONTA,BUFF, P, D), &
          !$OMP DEFAULT(NONE)
 
          !BUFFER SIZE FOR DIST, AND NEIGH
          BUFF = MAX(4 * KNEIGHBOURS, 256) ! Safe starting size
          ALLOCATE(DIST(BUFF), NEIGH(BUFF))
 
-         !$OMP DO SCHEDULE(DYNAMIC)
+         !$OMP DO COLLAPSE(3) SCHEDULE(STATIC)
          DO KZ=1,NZ
             DO JY=1,NY
                DO IX=1,NX
@@ -323,34 +325,25 @@ CONTAINS
                   TAR(3) = RADZ(KZ)
 
                   !Search cell's kneighbours
-                  QUERY = knn_search(TREE, TAR, KNEIGHBOURS)
-                  DIST(1:KNEIGHBOURS) = QUERY%dist
-                  NEIGH(1:KNEIGHBOURS) = QUERY%idx
+                  !no need for sorting, we already now the furthest is at DIST(1)
+                  call knn_search(TREE,TAR,KNEIGHBOURS,TREEPOINTS,NEIGH(1:KNEIGHBOURS),DIST(1:KNEIGHBOURS),.FALSE.)
 
-                  IF (DIST(KNEIGHBOURS).GT.DX) THEN
+                  IF (DIST(1).GT.DX) THEN
                      CONTA=KNEIGHBOURS 
                   ELSE 
-                     !.true. stands for sorting
-                     QUERY = ball_search(TREE, TAR, DX, .true.)
-                     CONTA = SIZE(QUERY%dist)
-
-                     !CHECK IF BUFFER IS ENOUGH
-                     IF (CONTA.GT.BUFF) THEN
-                        DEALLOCATE(DIST,NEIGH)
-                        BUFF = INT(1.5*CONTA, KIND=8)
-                        ALLOCATE(DIST(BUFF), NEIGH(BUFF))
-                     ENDIF
-
-                     DIST(1:CONTA) = QUERY%dist
-                     NEIGH(1:CONTA) = QUERY%idx
-
+                     !resize of BUFF handled internally by ball_search
+                     call ball_search(TREE,TAR,DX,TREEPOINTS,BUFF,NEIGH,DIST,CONTA,.FALSE.)
                   END IF
 
                   !!!! For SPH density interpolation !!!!!!!!!!!!
                   !CHANGE VALUE OF HPART FOR ALL CELL NEIGHBOURS
                   DO I=1,CONTA
-                     !$OMP ATOMIC
-                     HPART(NEIGH(I)) = MAX(HPART(NEIGH(I)), DIST(I))
+                     P = TREEIDX(NEIGH(I))
+                     D = DIST(I)
+                     IF (D > HPART(P)) THEN
+                        !$OMP ATOMIC
+                        HPART(P) = MAX(HPART(P), D)
+                     END IF
                   END DO
                   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -368,7 +361,7 @@ CONTAINS
 
 
 !********************************************************************************  
-   SUBROUTINE H_RANDOMS(NRAND,NPARTT,RANDX,RANDY,RANDZ,TREE,HPART,HRAND,KMEAN)
+   SUBROUTINE H_RANDOMS(NRAND,NPARTT,RANDX,RANDY,RANDZ,TREE,TREEPOINTS,TREEIDX,HPART,HRAND,KMEAN)
    !ESTIMATES THE SMOOTHING LENGTH OF RANDOMS ACCORDIN TO NEIGHBOUR GALAXIES/PARTICLES
 !********************************************************************************  
       USE COSMOKDTREE
@@ -378,10 +371,13 @@ CONTAINS
       INTEGER(KIND=8) :: NRAND,NPARTT, I
       REAL*4, INTENT(IN) :: RANDX(:),RANDY(:),RANDZ(:)
       INTEGER :: KMEAN, J
+      REAL*4 :: TREEPOINTS(3,NPARTT)
+      INTEGER(KIND=8) :: TREEIDX(NPARTT)
 
       !query
       type(KDTreeNode), pointer :: TREE
-      type(KDTreeResult) :: QUERY
+      INTEGER*8 :: Q_IDX(KMEAN)
+      REAL*4  :: Q_DIST(KMEAN)
       REAL*4 :: TAR(3)
 
       !SPH related
@@ -389,19 +385,20 @@ CONTAINS
       REAL*4 :: HRAND(NRAND)
       REAL*4 :: HKERN
 
-      !$OMP PARALLEL DO SHARED(NRAND,RANDX,RANDY,RANDZ,TREE,HRAND,HPART,KMEAN),&
-      !$OMP PRIVATE(I,J,QUERY,TAR,HKERN), DEFAULT(NONE)
+      !$OMP PARALLEL SHARED(NRAND,RANDX,RANDY,RANDZ,TREE,TREEPOINTS,TREEIDX,HRAND,HPART,KMEAN),&
+      !$OMP PRIVATE(I,Q_IDX,Q_DIST,TAR), DEFAULT(NONE)
+      !$OMP DO SCHEDULE(STATIC)
       DO I=1,NRAND
          TAR(1) = RANDX(I)
          TAR(2) = RANDY(I)
          TAR(3) = RANDZ(I)
-         QUERY = knn_search(TREE, TAR, KMEAN)
-         HKERN = 0.
-         DO J=1,KMEAN
-            HKERN = HKERN + HPART(QUERY%idx(J))
-         ENDDO
-         HRAND(I) = HKERN / REAL(KMEAN)
+         
+         call knn_search(TREE, TAR, KMEAN, TREEPOINTS, Q_IDX, Q_DIST, .FALSE.)
+         
+         HRAND(I) = SUM(HPART(TREEIDX(Q_IDX(1:KMEAN)))) / REAL(KMEAN)
       ENDDO
+      !$OMP END DO
+      !$OMP END PARALLEL
       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 !********************************************************************************
@@ -410,7 +407,7 @@ CONTAINS
 
 
 !********************************************************************************  
-   SUBROUTINE FILL_H_ZEROS(KNEIGHBOURS,NPARTT,RXPA,RYPA,RZPA,TREE,HPART)
+   SUBROUTINE FILL_H_ZEROS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,HPART)
    !fills zeros of hpart (particles that didnt contribute to the mean SPH kernel on velocity)
    !with distance to k-th neighbour
 !********************************************************************************  
@@ -420,33 +417,38 @@ CONTAINS
       !input variables
       INTEGER(KIND=8) :: NPARTT, I
       INTEGER :: KNEIGHBOURS
-      REAL*4, INTENT(IN) :: RXPA(:),RYPA(:),RZPA(:)
+      REAL*4 :: TREEPOINTS(3,NPARTT)
 
       !query
       type(KDTreeNode), pointer :: TREE
-      type(KDTreeResult) :: QUERY
+      INTEGER*8 :: Q_IDX(KNEIGHBOURS)
+      REAL*4  :: Q_DIST(KNEIGHBOURS)
       REAL*4 :: TAR(3)
 
       !SPH related
       REAL*4 :: HPART(NPARTT)
+      INTEGER(KIND=8) :: TREEIDX(NPARTT), II
 
-      !$OMP PARALLEL DO SHARED(RXPA,RYPA,RZPA,NPARTT,TREE,HPART,KNEIGHBOURS),&
-      !$OMP PRIVATE(I,QUERY,TAR), DEFAULT(NONE)
+      !$OMP PARALLEL SHARED(NPARTT,TREE,TREEPOINTS,TREEIDX,HPART,KNEIGHBOURS),&
+      !$OMP PRIVATE(I,Q_IDX,Q_DIST,TAR,II), DEFAULT(NONE)
+      !$OMP DO SCHEDULE(STATIC)
       DO I=1,NPARTT
-         IF (HPART(I) > 0.) CYCLE
-         TAR(1) = RXPA(I)
-         TAR(2) = RYPA(I)
-         TAR(3) = RZPA(I)
-         QUERY = knn_search(TREE, TAR, KNEIGHBOURS)
-         HPART(I) = QUERY%dist(KNEIGHBOURS)
+         !II is global ID, I is ID in the tree
+         II = TREEIDX(I)
+         IF (HPART(II) > 0.) CYCLE
+         TAR(1:3) = TREEPOINTS(1:3,I)
+         call knn_search(TREE, TAR, KNEIGHBOURS, TREEPOINTS, Q_IDX, Q_DIST, .FALSE.)
+         HPART(II) = Q_DIST(1)
       ENDDO
+      !$OMP END DO
+      !$OMP END PARALLEL
       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !********************************************************************************
    END SUBROUTINE FILL_H_ZEROS
 !********************************************************************************
 
 !********************************************************************************
-   SUBROUTINE DDENS_INTERP_SPH(NX,NY,NZ,NPARTT,RXPA,RYPA,RZPA, &
+   SUBROUTINE DDENS_INTERP_SPH(NX,NY,NZ,NPARTT,TREEPOINTS,TREEIDX, &
                   HPART,MASAP,SMASK,U)
 !using HPART, smoothing lenght given
 !by the furthest cell to which the particle contributes in the
@@ -457,8 +459,9 @@ CONTAINS
          IMPLICIT NONE
          !input variables
          INTEGER NX,NY,NZ
-         INTEGER(KIND=8) :: NPARTT, I
-         REAL*4, INTENT(IN) :: RXPA(:),RYPA(:),RZPA(:)
+         INTEGER(KIND=8) :: NPARTT, I, II
+         REAL*4, INTENT(IN) :: TREEPOINTS(3,NPARTT)
+         INTEGER(KIND=8), INTENT(IN) :: TREEIDX(NPARTT)
          REAL*4, INTENT(IN) :: MASAP(:)
          INTEGER*1 :: SMASK(:,:,:)
 
@@ -492,20 +495,24 @@ CONTAINS
          U8 = 0.0_8
 
          !$OMP PARALLEL DO SHARED(NPARTT,HPART,RX1,RY1,RZ1,SMASK, &
-         !$OMP                   RXPA,RYPA,RZPA,MASAP,RADX,RADY,RADZ, &
+         !$OMP                   TREEPOINTS,TREEIDX,MASAP,RADX,RADY,RADZ, &
          !$OMP                   DX,DY,DZ,NX,NY,NZ,KERNEL_MODE,U8), &
-         !$OMP PRIVATE(I,IX,JY,KZ,IX2,JY2,KZ2,H,DX2,DY2,DZ2, &
+         !$OMP PRIVATE(I,II,IX,JY,KZ,IX2,JY2,KZ2,H,DX2,DY2,DZ2, &
          !$OMP       INCREX,INCREY,INCREZ,DDIST,NORM,Q,Q2, &
          !$OMP       D2,H2_MAX,INV_H,INV_H_SQ,WEIGHT), &
-         !$OMP SCHEDULE(DYNAMIC), DEFAULT(NONE)
+         !$OMP SCHEDULE(STATIC), DEFAULT(NONE)
          !$$$$$$$$$$$$$$$$$$$$
          DO I=1,NPARTT
          !$$$$$$$$$$$$$$$$$$$$
-            IX = INT((RXPA(I)-RX1)/DX)+1
-            JY = INT((RYPA(I)-RY1)/DY)+1
-            KZ = INT((RZPA(I)-RZ1)/DZ)+1
 
-            H = HPART(I)
+            !II is global ID, I is ID in the tree
+            II = TREEIDX(I)
+
+            IX = INT((TREEPOINTS(1,I)-RX1)/DX)+1
+            JY = INT((TREEPOINTS(2,I)-RY1)/DY)+1
+            KZ = INT((TREEPOINTS(3,I)-RZ1)/DZ)+1
+
+            H = HPART(II)
             INV_H = 2./H
             INV_H_SQ = INV_H * INV_H
             H2_MAX = 4.*H*H 
@@ -519,14 +526,14 @@ CONTAINS
             NORM = 0.
             DO KZ2=KZ-INCREZ,KZ+INCREZ
                IF (KZ2.LT.1 .OR. KZ2.GT.NZ) CYCLE
-               DZ2 = (RZPA(I)-RADZ(KZ2))**2
+               DZ2 = (TREEPOINTS(3,I)-RADZ(KZ2))**2
                DO JY2=JY-INCREY,JY+INCREY
                   IF (JY2.LT.1 .OR. JY2.GT.NY) CYCLE
-                  DY2 = (RYPA(I)-RADY(JY2))**2
+                  DY2 = (TREEPOINTS(2,I)-RADY(JY2))**2
                   DO IX2=IX-INCREX,IX+INCREX
                      IF (IX2.LT.1 .OR. IX2.GT.NX) CYCLE
                      ! IF (SMASK(IX2,JY2,KZ2) .EQ. 0) CYCLE
-                     DX2 = (RXPA(I)-RADX(IX2))**2
+                     DX2 = (TREEPOINTS(1,I)-RADX(IX2))**2
 
                      !DISTANCE BETWEEN PARTICLE AND GRID POINT
                      D2 = DX2+DY2+DZ2
@@ -566,7 +573,7 @@ CONTAINS
                   JY.GE.1 .AND. JY.LE.NY .AND. &
                   KZ.GE.1 .AND. KZ.LE.NZ) THEN
                   !$OMP ATOMIC
-                  U8(IX,JY,KZ) =  U8(IX,JY,KZ) + REAL(MASAP(I),8)
+                  U8(IX,JY,KZ) =  U8(IX,JY,KZ) + REAL(MASAP(II),8)
                ENDIF
                CYCLE
             ENDIF
@@ -575,14 +582,14 @@ CONTAINS
             !Now, interpolate
             DO KZ2=KZ-INCREZ,KZ+INCREZ
                IF (KZ2.LT.1 .OR. KZ2.GT.NZ) CYCLE
-               DZ2 = (RZPA(I)-RADZ(KZ2))**2
+               DZ2 = (TREEPOINTS(3,I)-RADZ(KZ2))**2
                DO JY2=JY-INCREY,JY+INCREY
                   IF (JY2.LT.1 .OR. JY2.GT.NY) CYCLE
-                  DY2 = (RYPA(I)-RADY(JY2))**2
+                  DY2 = (TREEPOINTS(2,I)-RADY(JY2))**2
                   DO IX2=IX-INCREX,IX+INCREX
                      IF (IX2.LT.1 .OR. IX2.GT.NX) CYCLE
                      ! IF (SMASK(IX2,JY2,KZ2) .EQ. 0) CYCLE
-                     DX2 = (RXPA(I)-RADX(IX2))**2
+                     DX2 = (TREEPOINTS(1,I)-RADX(IX2))**2
 
                      !DISTANCE BETWEEN PARTICLE AND GRID POINT
                      D2 = DX2+DY2+DZ2
@@ -612,7 +619,7 @@ CONTAINS
                            
                      !Update
                      !$OMP ATOMIC
-                     U8(IX2,JY2,KZ2) = U8(IX2,JY2,KZ2) + REAL(WEIGHT*MASAP(I)/NORM,8)
+                     U8(IX2,JY2,KZ2) = U8(IX2,JY2,KZ2) + REAL(WEIGHT*MASAP(II)/NORM,8)
 
                   ENDDO
                ENDDO
@@ -634,21 +641,22 @@ CONTAINS
 
 
 !********************************************************************************
-   SUBROUTINE VVEL_INTERP_SPH(KNEIGHBOURS,NX,NY,NZ,NPARTT,TREE, &
-                        HPART,MASAP,U2PA,U3PA,U4PA,SMASK,U2,U3,U4)
+   SUBROUTINE VVEL_INTERP_SPH(KNEIGHBOURS,NX,NY,NZ,NPARTT,TREE,TREEPOINTS, &
+                        TREEIDX,HPART,MASAP,U2PA,U3PA,U4PA,SMASK,U2,U3,U4)
 !********************************************************************************
          USE COSMOKDTREE 
-         USE COMMONDATA, ONLY: DX,DY,DZ,RADX,RADY,RADZ, &   
-                              RXPA,RYPA,RZPA,PI
+         USE COMMONDATA, ONLY: DX,DY,DZ,RADX,RADY,RADZ,PI
 
          IMPLICIT NONE
          !input variables
-         INTEGER KNEIGHBOURS
+         INTEGER KNEIGHBOURS, BUFF, CONTA
          INTEGER NX,NY,NZ
-         INTEGER(KIND=8) :: NPARTT, CONTA, I, BUFF, P
+         INTEGER(KIND=8) :: NPARTT, I, P
          REAL*4, INTENT(IN) :: U2PA(:),U3PA(:),U4PA(:)
          REAL*4, INTENT(IN) :: MASAP(:)
          INTEGER*1 :: SMASK(:,:,:)
+         REAL*4 :: TREEPOINTS(3,NPARTT)
+         INTEGER(KIND=8), INTENT(IN) :: TREEIDX(NPARTT)
 
          !LOCAL
          INTEGER :: IX,JY,KZ
@@ -661,23 +669,22 @@ CONTAINS
          
          !query
          type(KDTreeNode), pointer, intent(in) :: TREE
-         type(KDTreeResult) :: QUERY
-         
          REAL*4 :: TAR(3), D
+
          !SPH related
          REAL*4 :: HPART(NPARTT)
          
          !output
          REAL*4 U2(NX,NY,NZ), U3(NX,NY,NZ), U4(NX,NY,NZ)
 
-         !$OMP PARALLEL SHARED(KNEIGHBOURS,NX,NY,NZ,U2PA,U3PA,U4PA,U2,U3,U4, &
-         !$OMP                 TREE,DX,DY,DZ,RADX,RADY,RADZ,MASAP,SMASK,HPART) &
-         !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,NEIGH, P, D, W8, &
+         !$OMP PARALLEL SHARED(KNEIGHBOURS,NX,NY,NZ,U2PA,U3PA,U4PA,U2,U3,U4,TREEIDX,&
+         !$OMP                 TREE,TREEPOINTS,DX,DY,DZ,RADX,RADY,RADZ,MASAP,SMASK,HPART) &
+         !$OMP PRIVATE(I,IX,JY,KZ,TAR,DIST,NEIGH, P, D, W8, &
          !$OMP         HKERN,BAS8,BAS8X,BAS8Y,BAS8Z,CONTA,BUFF) DEFAULT(NONE)
          !BUFFER SIZE FOR DIST, AND NEIGH
          BUFF = MAX(4 * KNEIGHBOURS, 256) ! Safe starting size
          ALLOCATE(DIST(BUFF), NEIGH(BUFF))
-         !$OMP DO SCHEDULE(DYNAMIC)
+         !$OMP DO COLLAPSE(3) SCHEDULE(STATIC)
          DO KZ=1,NZ
             DO JY=1,NY
                DO IX=1,NX
@@ -690,33 +697,19 @@ CONTAINS
                   TAR(3) = RADZ(KZ)
 
                   !Search cell's kneighbours
-                  QUERY = knn_search(TREE, TAR, KNEIGHBOURS)
-                  DIST(1:KNEIGHBOURS) = QUERY%dist
-                  NEIGH(1:KNEIGHBOURS) = QUERY%idx
+                  call knn_search(TREE,TAR,KNEIGHBOURS,TREEPOINTS,NEIGH(1:KNEIGHBOURS),DIST(1:KNEIGHBOURS),.FALSE.)
 
-                  IF (DIST(KNEIGHBOURS).GT.DX) THEN
+                  IF (DIST(1).GT.DX) THEN
                      CONTA=KNEIGHBOURS 
                   ELSE 
-                     !.true. stands for sorting
-                     QUERY = ball_search(TREE, TAR, DX, .true.)
-                     CONTA = SIZE(QUERY%dist)
-
-                     !CHECK IF BUFFER IS ENOUGH
-                     IF (CONTA.GT.BUFF) THEN
-                        DEALLOCATE(DIST,NEIGH)
-                        BUFF = INT(1.5*CONTA, KIND=8)
-                        ALLOCATE(DIST(BUFF), NEIGH(BUFF))
-                     ENDIF
-
-                     DIST(1:CONTA) = QUERY%dist
-                     NEIGH(1:CONTA) = QUERY%idx
-
+                     !resize of BUFF handled internally by ball_search
+                     call ball_search(TREE,TAR,DX,TREEPOINTS,BUFF,NEIGH,DIST,CONTA,.FALSE.)
                   END IF
 
                   !!!! For SPH density interpolation !!!!!!!!!!!!
                   !CHANGE VALUE OF HPART FOR ALL CELL NEIGHBOURS
                   DO I=1,CONTA
-                     P = NEIGH(I)
+                     P = TREEIDX(NEIGH(I))
                      D = DIST(I)
                      IF (D > HPART(P)) THEN
                         !$OMP ATOMIC
@@ -726,14 +719,14 @@ CONTAINS
                   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
                   !cell's smoothing length
-                  HKERN=DIST(CONTA)
+                  HKERN=MAXVAL(DIST(1:CONTA))
 
                   !Using Fortran array syntax for Elemental routines
                   CALL KERNEL_FUNC(HKERN, DIST(1:CONTA))
 
-                  !VOLUME-weighting
+                  !MASS-weighting
                   DO I=1,CONTA
-                     DIST(I) = DIST(I) * MASAP(NEIGH(I))
+                     DIST(I) = DIST(I) * MASAP(TREEIDX(NEIGH(I)))
                   END DO
 
                   !averaging
@@ -745,9 +738,9 @@ CONTAINS
                      !weight
                      W8 = REAL(DIST(I), 8)
                      BAS8=BAS8+W8
-                     BAS8X=BAS8X+W8*U2PA(NEIGH(I))
-                     BAS8Y=BAS8Y+W8*U3PA(NEIGH(I))
-                     BAS8Z=BAS8Z+W8*U4PA(NEIGH(I))
+                     BAS8X=BAS8X+W8*U2PA(TREEIDX(NEIGH(I)))
+                     BAS8Y=BAS8Y+W8*U3PA(TREEIDX(NEIGH(I)))
+                     BAS8Z=BAS8Z+W8*U4PA(TREEIDX(NEIGH(I)))
                   END DO
 
                   U2(IX,JY,KZ)=BAS8X/BAS8
@@ -768,17 +761,19 @@ CONTAINS
 
 
 !********************************************************************************
-   SUBROUTINE PPART_DENS(KNEIGHBOURS,NPARTT,TREE,MASAP,PART_DENS)
+   SUBROUTINE PPART_DENS(KNEIGHBOURS,NPARTT,TREE,TREEPOINTS,TREEIDX,MASAP,PART_DENS)
 ! Obtains the density at the position of each particle using Nearest Neighbours
 !********************************************************************************
          USE COSMOKDTREE 
-         USE COMMONDATA, ONLY: RXPA,RYPA,RZPA,PI
+         USE COMMONDATA, ONLY:PI
 
          IMPLICIT NONE
          !input variables
          INTEGER :: KNEIGHBOURS
-         INTEGER(KIND=8) :: NPARTT, I, J
+         INTEGER(KIND=8) :: NPARTT, I, J, II, JJ
          REAL*4, INTENT(IN) :: MASAP(:)
+         REAL*4, INTENT(IN) :: TREEPOINTS(3,NPARTT)
+         INTEGER*8, INTENT(IN) :: TREEIDX(NPARTT)
          !LOCAL
          REAL*8 BAS8, CONST
 
@@ -787,8 +782,8 @@ CONTAINS
 
          !query
          type(KDTreeNode), pointer, intent(in) :: TREE
-         type(KDTreeResult) :: QUERY
-         
+         INTEGER*8 :: Q_IDX(KNEIGHBOURS)
+         REAL*4  :: Q_DIST(KNEIGHBOURS)
          REAL*4 :: TAR(3)
 
          !output
@@ -796,25 +791,29 @@ CONTAINS
 
          CONST = 3.D0 / (4.D0 * PI)
 
-         !$OMP PARALLEL SHARED(KNEIGHBOURS, NPARTT, MASAP, TREE, RXPA, RYPA, RZPA, &
-         !$OMP                 PART_DENS, CONST) &
-         !$OMP PRIVATE(I, J, QUERY, TAR, BAS8, HKERN) DEFAULT(NONE)
-         !$OMP DO SCHEDULE(DYNAMIC)
+         !$OMP PARALLEL SHARED(KNEIGHBOURS,NPARTT,MASAP,TREE,TREEPOINTS, &
+         !$OMP                 TREEIDX,PART_DENS,CONST) &
+         !$OMP PRIVATE(I,II,J,JJ,TAR,BAS8,HKERN,Q_IDX,Q_DIST) DEFAULT(NONE)
+         !$OMP DO SCHEDULE(STATIC)
          DO I=1,NPARTT
-            TAR(1) = RXPA(I)
-            TAR(2) = RYPA(I)
-            TAR(3) = RZPA(I)
 
-            QUERY = knn_search(TREE, TAR, KNEIGHBOURS)
-            HKERN = QUERY%dist(KNEIGHBOURS)
+            !II is global ID, I is ID in the tree
+            II = TREEIDX(I)
+
+            TAR(1:3) = TREEPOINTS(1:3,I)
+
+            !no need for sorting, furthest is at Q_DIST(1)
+            CALL knn_search(TREE, TAR, KNEIGHBOURS, TREEPOINTS, Q_IDX, Q_DIST, .FALSE.)
+            
+            HKERN = Q_DIST(1)
 
             BAS8 = 0.D0
             DO J=1, KNEIGHBOURS
-               BAS8 = BAS8 + MASAP(QUERY%idx(J))
+               JJ = TREEIDX(Q_IDX(J))
+               BAS8 = BAS8 + MASAP(JJ)
             END DO
             
-            ! Calculate density using the precomputed inverse constant
-            PART_DENS(I) = BAS8 * CONST / (HKERN**3)
+            PART_DENS(II) = BAS8 * CONST / (HKERN**3)
          ENDDO
          !$OMP END DO
          !$OMP END PARALLEL
@@ -825,23 +824,24 @@ CONTAINS
 
 
 !********************************************************************************
-   SUBROUTINE VVEL_INTERP_SPH_VW(KNEIGHBOURS,NX,NY,NZ,NPARTT,TREE, &
-                        HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,U2,U3,U4)
+   SUBROUTINE VVEL_INTERP_SPH_VW(KNEIGHBOURS,NX,NY,NZ,NPARTT,TREE,TREEPOINTS, &
+                        TREEIDX,HPART,PART_DENS,MASAP,U2PA,U3PA,U4PA,SMASK,U2,U3,U4)
 !
 ! SAME AS VVEL_INTERP_SPH BUT USING VOLUME WEIGHTING instead of MASS
 !********************************************************************************
          USE COSMOKDTREE 
-         USE COMMONDATA, ONLY: DX,DY,DZ,RADX,RADY,RADZ, &   
-                              RXPA,RYPA,RZPA,PI
+         USE COMMONDATA, ONLY: DX,DY,DZ,RADX,RADY,RADZ,PI
 
          IMPLICIT NONE
          !input variables
-         INTEGER KNEIGHBOURS
+         INTEGER KNEIGHBOURS, BUFF, CONTA
          INTEGER NX,NY,NZ
-         INTEGER(KIND=8) :: NPARTT, CONTA, I, BUFF, P
+         INTEGER(KIND=8) :: NPARTT, I, P
          REAL*4, INTENT(IN) :: U2PA(:),U3PA(:),U4PA(:)
          REAL*4, INTENT(IN) :: MASAP(:)
          INTEGER*1 :: SMASK(:,:,:)
+         REAL*4 :: TREEPOINTS(3,NPARTT)
+         INTEGER(KIND=8), INTENT(IN) :: TREEIDX(NPARTT)
 
          !LOCAL
          INTEGER :: IX,JY,KZ
@@ -854,9 +854,8 @@ CONTAINS
          
          !query
          type(KDTreeNode), pointer, intent(in) :: TREE
-         type(KDTreeResult) :: QUERY
-         
          REAL*4 :: TAR(3), D
+
          !SPH related
          REAL*4 :: HPART(NPARTT)
          REAL*4 :: PART_DENS(NPARTT)
@@ -868,7 +867,8 @@ CONTAINS
 
          !pre-compute volume
          ALLOCATE(PART_VOL(NPARTT))
-         !$OMP PARALLEL DO SCHEDULE(STATIC)
+         !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+         !$OMP SHARED(NPARTT, PART_VOL, MASAP, PART_DENS) PRIVATE(I)
          DO I=1, NPARTT
             PART_VOL(I) = MASAP(I) / PART_DENS(I)
          END DO
@@ -876,13 +876,13 @@ CONTAINS
 
 
          !$OMP PARALLEL SHARED(KNEIGHBOURS,NX,NY,NZ,U2PA,U3PA,U4PA,U2,U3,U4, &
-         !$OMP                 TREE,DX,DY,DZ,RADX,RADY,RADZ,PART_VOL,SMASK,HPART) &
-         !$OMP PRIVATE(I,IX,JY,KZ,QUERY,TAR,DIST,NEIGH, P, D, W8, &
+         !$OMP                 TREE,TREEPOINTS,DX,DY,DZ,RADX,RADY,RADZ,PART_VOL,SMASK,HPART,TREEIDX) &
+         !$OMP PRIVATE(I,IX,JY,KZ,TAR,DIST,NEIGH, P, D, W8, &
          !$OMP         HKERN,BAS8,BAS8X,BAS8Y,BAS8Z,CONTA,BUFF) DEFAULT(NONE)
          !BUFFER SIZE FOR DIST, AND NEIGH
          BUFF = MAX(4 * KNEIGHBOURS, 256) ! Safe starting size
          ALLOCATE(DIST(BUFF), NEIGH(BUFF))
-         !$OMP DO SCHEDULE(DYNAMIC)
+         !$OMP DO COLLAPSE(3) SCHEDULE(STATIC)
          DO KZ=1,NZ
             DO JY=1,NY
                DO IX=1,NX
@@ -895,33 +895,19 @@ CONTAINS
                   TAR(3) = RADZ(KZ)
 
                   !Search cell's kneighbours
-                  QUERY = knn_search(TREE, TAR, KNEIGHBOURS)
-                  DIST(1:KNEIGHBOURS) = QUERY%dist
-                  NEIGH(1:KNEIGHBOURS) = QUERY%idx
+                  call knn_search(TREE,TAR,KNEIGHBOURS,TREEPOINTS,NEIGH(1:KNEIGHBOURS),DIST(1:KNEIGHBOURS),.FALSE.)
 
-                  IF (DIST(KNEIGHBOURS).GT.DX) THEN
+                  IF (DIST(1).GT.DX) THEN
                      CONTA=KNEIGHBOURS 
                   ELSE 
-                     !.true. stands for sorting
-                     QUERY = ball_search(TREE, TAR, DX, .true.)
-                     CONTA = SIZE(QUERY%dist)
-
-                     !CHECK IF BUFFER IS ENOUGH
-                     IF (CONTA.GT.BUFF) THEN
-                        DEALLOCATE(DIST,NEIGH)
-                        BUFF = INT(1.5*CONTA, KIND=8)
-                        ALLOCATE(DIST(BUFF), NEIGH(BUFF))
-                     ENDIF
-
-                     DIST(1:CONTA) = QUERY%dist
-                     NEIGH(1:CONTA) = QUERY%idx
-
+                     !resize of BUFF handled internally by ball_search
+                     call ball_search(TREE,TAR,DX,TREEPOINTS,BUFF,NEIGH,DIST,CONTA,.FALSE.)
                   END IF
 
                   !!!! For SPH density interpolation !!!!!!!!!!!!
                   !CHANGE VALUE OF HPART FOR ALL CELL NEIGHBOURS
                   DO I=1,CONTA
-                     P = NEIGH(I)
+                     P = TREEIDX(NEIGH(I))
                      D = DIST(I)
                      IF (D > HPART(P)) THEN
                         !$OMP ATOMIC
@@ -931,14 +917,14 @@ CONTAINS
                   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
                   !cell's smoothing length
-                  HKERN=DIST(CONTA)
+                  HKERN=MAXVAL(DIST(1:CONTA))
 
                   !Using Fortran array syntax for Elemental routines
                   CALL KERNEL_FUNC(HKERN, DIST(1:CONTA))
 
                   !VOLUME-weighting
                   DO I=1,CONTA
-                     DIST(I)=DIST(I) * PART_VOL(NEIGH(I))
+                     DIST(I)=DIST(I) * PART_VOL(TREEIDX(NEIGH(I)))
                   END DO
 
                   !averaging
@@ -950,9 +936,9 @@ CONTAINS
                      !weight
                      W8 = REAL(DIST(I), 8)
                      BAS8=BAS8+W8
-                     BAS8X=BAS8X+W8*U2PA(NEIGH(I))
-                     BAS8Y=BAS8Y+W8*U3PA(NEIGH(I))
-                     BAS8Z=BAS8Z+W8*U4PA(NEIGH(I))
+                     BAS8X=BAS8X+W8*U2PA(TREEIDX(NEIGH(I))) 
+                     BAS8Y=BAS8Y+W8*U3PA(TREEIDX(NEIGH(I)))
+                     BAS8Z=BAS8Z+W8*U4PA(TREEIDX(NEIGH(I)))
                   END DO
 
                   U2(IX,JY,KZ)=BAS8X/BAS8

@@ -288,9 +288,8 @@ END SUBROUTINE READ_AREPO_HDF5
 !***********************************************************************
 
 
-
 !***********************************************************************
-SUBROUTINE READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
+SUBROUTINE READ_FLAMINGO_HDF5(ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
 !***********************************************************************
 !*       Reads particle data of the simulation
 !***********************************************************************
@@ -341,13 +340,10 @@ SUBROUTINE READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
 
       WRITE(*,*) 'Files per snapshot: ', FILES_PER_SNAP
 
-      !DARK MATTER
-      PARTTYPEX = 2
-
-       LOW2=0
-       !###################################
-       DO IFILE=0,FILES_PER_SNAP-1 
-       !###################################
+      LOW2=0
+      !###################################
+      DO IFILE=0,FILES_PER_SNAP-1 
+      !###################################
 
        !*     READING DATA
        WRITE(ITER_STRING, '(I4.4)') ITER
@@ -395,7 +391,6 @@ SUBROUTINE READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
        CALL h5aread_f(attr_id, memtype_id, ZETA, dims1d, status)
 
        CALL h5aclose_f(attr_id, status)
-
        CALL h5gclose_f(group_id, status)
        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -435,15 +430,27 @@ SUBROUTINE READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
        DEALLOCATE(SCR82)
        DEALLOCATE(SCR42)
 
-       ! WRITE(*,*) 'Assigning masses ...'
-       MASAP = MASSDM ! mass of DM particles in Msun
+       IF (PARTTYPEX .EQ. 1) THEN
+          ALLOCATE(SCR4(NumPart_ThisFile(PARTTYPEX)))
+       
+          CALL h5dopen_f(group_id, "Masses", attr_id, status)
+          CALL h5dget_type_f(attr_id, memtype_id, status)
+          CALL h5dread_f(attr_id, memtype_id, SCR4, dims1d, status)
+          MASAP(LOW1:LOW2)=SCR4(1:NumPart_ThisFile(PARTTYPEX))
+          CALL h5dclose_f(attr_id, status)
+
+          DEALLOCATE(SCR4)
+
+       ELSE IF (PARTTYPEX .EQ. 2) THEN
+          MASAP = MASSDM ! mass of DM particles in Msun
+       ENDIF
               
        CALL h5gclose_f(group_id, status)
        CALL h5fclose_f(file_id, status)
 
-       !###################################
-       END DO 
-       !###################################
+      !###################################
+      END DO 
+      !###################################
 
       NPARTT = LOW2
       WRITE(*,*) '     TOTAL PARTICLES IN ITER=', NPARTT
@@ -469,6 +476,7 @@ SUBROUTINE READ_FLAMINGO_DMO_HDF5(ITER,FILES_PER_SNAP,MASSDM,ACHE,ZETA)
       WRITE(*,*) minval(U4PA), maxval(U4PA)
 
       RETURN
+
 !***********************************************************************
-END SUBROUTINE READ_FLAMINGO_DMO_HDF5
+END SUBROUTINE READ_FLAMINGO_HDF5
 !***********************************************************************
