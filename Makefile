@@ -11,7 +11,7 @@ $(info HDF5 = $(HDF5))
 #### This is an example for a local machine ####
 ifeq ($(COMP),1)          
  FC=gfortran
- FFLAGS=-O2 -mcmodel=medium -fopenmp -mieee-fp -ftree-vectorize -march=native -funroll-loops
+ FFLAGS=-O3 -march=native -fopenmp -ffast-math -flto=auto
  LIBS=
  INC=
 endif
@@ -19,7 +19,7 @@ endif
 #### This is an example for a local machine DEBUGGING ####
 ifeq ($(COMP),2)          
  FC=gfortran
- FFLAGS=-O1 -g -mcmodel=medium -fopenmp -mieee-fp -ftree-vectorize -march=native -fcheck=all -fbounds-check -fbacktrace -ffpe-trap=invalid,zero,overflow
+ FFLAGS=-O1 -g -fopenmp -mieee-fp -march=native -fcheck=all -fbounds-check -fbacktrace -ffpe-trap=invalid,zero,overflow
  LIBS=
  INC=
 endif
