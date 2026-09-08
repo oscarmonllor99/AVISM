@@ -42,7 +42,7 @@ IF GADGET-like: files per snapshot, PartType (1:gas, 2:dm), DM mass (Msun) --->
 16,2,4.52E10
 GADGET-like reader: 0:IllustrisTNG, 1:FLAMINGO-DMO --------------------------->
 1
-IF SURVEY -> 0:yes, 1:no ----------------------------------------------------->
+IF SURVEY -> 0:no, 1:yes ----------------------------------------------------->
 0
 *******************************************************************************
 *       Particle data handling parameters                                   
