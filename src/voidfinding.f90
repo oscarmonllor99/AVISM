@@ -963,9 +963,7 @@ SUBROUTINE MERGE_VOID(NVOID,INDICE,LOW1,LOW2,DXX,DYY,DZZ,VOLNEW,UVOID,GXC,GYC,GZ
 
         call ball_search(TREE, TAR, RR, TREEPOINTS, BUFF, Q_NEIGH, Q_DIST, CONTA, .true.)
 
-         ! DO J=I+1,NVOID
-         !   IND2 = INDICE(J)        
-         DO II=1,CONTA
+        DO II=1,CONTA
            IND2=TREEIDX(Q_NEIGH(II))
 
            IF(IND2.EQ.IND1) CYCLE !it is the same void
@@ -1043,12 +1041,14 @@ END SUBROUTINE MERGE_VOID
 
 
 !***************************************************************************
-SUBROUTINE SIMPLE_CONNECTION_FAST(LOW1,LOW2,MARCA)
+SUBROUTINE SIMPLE_CONNECTION_FAST(LOW1,LOW2)
 !Breadth-First Search [O(Ncell)] algorithm to find the connected area outside
 !a void. Everything that is not connected to this area and does
 !not belong to the void, is a hole that must be filled.
 !***************************************************************************
 
+   USE COMMONDATA
+   
    IMPLICIT NONE
    !input variables
    INTEGER :: LOW1, LOW2
@@ -1061,7 +1061,7 @@ SUBROUTINE SIMPLE_CONNECTION_FAST(LOW1,LOW2,MARCA)
    INTEGER, ALLOCATABLE, DIMENSION(:,:) :: QUEUE
    INTEGER :: HEAD, TAIL
    !output variable
-   INTEGER :: MARCA(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2)
+   !INTEGER :: MARCA(LOW1:LOW2,LOW1:LOW2,LOW1:LOW2)
    
    WRITE(*,*) 'Breaddth-First Search algorithm starting...'
 
@@ -1188,7 +1188,11 @@ SUBROUTINE SIMPLE_CONNECTION_FAST(LOW1,LOW2,MARCA)
                II = II + 1
             ENDDO
             IND = MARCA(II,JY,KZ)
-            MARCA(IX,JY,KZ) = IND
+
+            !For subvoids, fill only if the parent void is the same as the one that encloses the hole
+            IF( MARCAP2(IX,JY,KZ) .EQ. FATHER(IND) ) THEN 
+               MARCA(IX,JY,KZ) = IND
+            ENDIF
          
          ENDDO
       ENDDO

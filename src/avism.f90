@@ -117,7 +117,7 @@
 
        !kd-tree and SPH Related
        INTEGER :: KNEIGHBOURS, KNEIGHBOURS2
-       INTEGER :: FLAG_KD
+       INTEGER :: FLAG_KD, FLAG_DEALLOC_RXP
        REAL, ALLOCATABLE :: HPART(:)
        REAL, ALLOCATABLE :: PART_DENS(:)
        type(KDTreeNode), pointer :: TREE,TREERAND
@@ -543,11 +543,11 @@
 
          call system_clock(t1,trate,tmax)
          IF(FLAG_GADGET_READER .EQ. 0) THEN
-            CALL READ_AREPO_HDF5(ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
+            CALL READ_HDF5_SNAP('AREPO',ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
          ELSE IF(FLAG_GADGET_READER .EQ. 1) THEN
-            CALL READ_FLAMINGO_HDF5(ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
+            CALL READ_HDF5_SNAP('FLAMINGO',ITER,FILES_PER_SNAP,PARTTYPEX,MASSDM,ACHE,ZETA)
          ELSE
-            WRITE(*,*) 'Provide a proper GADGET reader option: 0:Arepo, 1:Flamingo-DMO'
+            WRITE(*,*) 'Provide a proper GADGET reader option: 0:Arepo, 1:Flamingo'
             STOP 
          ENDIF
          call system_clock(t2,trate,tmax)
@@ -899,8 +899,8 @@
           ENDIF
 
           !which 'l-1' void is the father of this 'l' void
-          !it is updated inside VOIDFIND subroutine, using MARCAP
-          FATHER(:)=0
+          !it is updated inside the VOIDFIND subroutine, using MARCAP
+          FATHER(:)=-1
           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
           
 
@@ -932,6 +932,10 @@
             FLAG_KD = 1
          ENDIF
 
+         !Deallocation of RXPA,RYPA,RZPA after building k-d tree, to liberate memory for void-finding variables
+         FLAG_DEALLOC_RXP = 0
+         IF(FLAG_VEL_INTERP .EQ.1 .AND. FLAG_DENS_INTERP .EQ.1) FLAG_DEALLOC_RXP = 1
+
          IF (FLAG_KD .EQ. 1) THEN
             
             WRITE(*,*) 'Building k-d tree'
@@ -949,11 +953,11 @@
             !$OMP END PARALLEL
 
             TREEPOINTS(1,:) = RXPA(1:NPARTT)
-            DEALLOCATE(RXPA)
+            IF (FLAG_DEALLOC_RXP .EQ. 1) DEALLOCATE(RXPA)
             TREEPOINTS(2,:) = RYPA(1:NPARTT)
-            DEALLOCATE(RYPA)
+            IF (FLAG_DEALLOC_RXP .EQ. 1) DEALLOCATE(RYPA)
             TREEPOINTS(3,:) = RZPA(1:NPARTT)
-            DEALLOCATE(RZPA)
+            IF (FLAG_DEALLOC_RXP .EQ. 1) DEALLOCATE(RZPA)
 
             !keep track of k-d tree shuffling of particles
             ALLOCATE(TREEIDX(NPARTT))
@@ -1385,13 +1389,19 @@
           !*          Deallocate k-d tree variables, other deallocated after SURVEY part
           !*-------------------------------------------------------------------------------*
           IF (FLAG_KD .EQ. 1) THEN
+            
             DEALLOCATE(PART_DENS)
-            ALLOCATE(RXPA(NPARTT),RYPA(NPARTT),RZPA(NPARTT))
-            RXPA(:) = TREEPOINTS(1,:)
-            RYPA(:) = TREEPOINTS(2,:)
-            RZPA(:) = TREEPOINTS(3,:)
-            DEALLOCATE(TREEPOINTS)
-            DEALLOCATE(TREEIDX)
+            
+            IF (FLAG_DEALLOC_RXP .EQ. 1) THEN
+               ALLOCATE(RXPA(NPARTT),RYPA(NPARTT),RZPA(NPARTT))
+               DO I8=1,NPARTT
+                  RXPA(TREEIDX(I8)) = TREEPOINTS(1,I8)
+                  RYPA(TREEIDX(I8)) = TREEPOINTS(2,I8)
+                  RZPA(TREEIDX(I8)) = TREEPOINTS(3,I8)
+               ENDDO
+            ENDIF
+
+              DEALLOCATE(TREEPOINTS, TREEIDX)
           ENDIF
 
          !* Which density components to consider
@@ -1625,7 +1635,9 @@
                MEANDENS = 1.
 
                !no need for rand anymore
-               DEALLOCATE(RANDX,RANDY,RANDZ,MASSRAND,U1RAND,HRAND)
+               DEALLOCATE(RANDX,RANDY,RANDZ,MASSRAND,U1RAND)
+               IF (ALLOCATED(HRAND)) DEALLOCATE(HRAND)
+               
             !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             ENDIF
             !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1896,8 +1908,7 @@
           WRITE(*,*) '************************************************'
           WRITE(*,*) 'Filling holes within voids (Simple Connection)...'
           call system_clock(t1,trate,tmax)
-         !  CALL SIMPLE_CONNECTION(NVOID,INDICE,UVOID,MARCA,LOW1,LOW2)
-          CALL SIMPLE_CONNECTION_FAST(LOW1,LOW2,MARCA)
+          CALL SIMPLE_CONNECTION_FAST(LOW1,LOW2)
           call system_clock(t2,trate,tmax)
           WRITE(*,*) '///////////// Time (sec) spent during hole filling:', float(t2-t1)/1.e3
           WRITE(*,*) '************************************************'
@@ -2077,6 +2088,12 @@
           !!!! CATALOGUE file
 
           !^^^^^^^^^^^^^^HEADER^^^^^^^^^^^^^^^^
+
+          !SOME VARIABLES ARE UNINITIALIZED FOR LEV = 0
+          IF(IR .EQ. LEVMIN) THEN
+            NVOIDP = 0
+          ENDIF
+
           WRITE(10,*) IR, NVOID, NVOIDT, NVOIDP, FILLFRAC2, MEANDENS
 
 
@@ -2085,7 +2102,6 @@
           IF (FLAG_WRITE_CUBES .EQ. 1) THEN
              WRITE(12,*) IR, NVOID, NVOIDT
           END IF
-
 
           DO IV=1, NVOID
              IND=INDICE(IV)
@@ -2108,7 +2124,7 @@
              REQPP=0
              IF(IR .GT. LEVMIN ) THEN
                INDP=FATHER(IND)
-               REQPP=REQ(INDP)
+               REQPP=REQP(INDP)
              ENDIF
 
              WRITE(10,*) IND, XC(IND), YC(IND), ZC(IND), GXC(IND), GYC(IND), GZC(IND), &
@@ -2169,6 +2185,7 @@
 
           ALLOCATE(MARCAP(NX2,NY2,NZ2))
           ALLOCATE(REQP(NVOID))
+          REQP = 0. 
 
           DO IV=1, NVOID
              IND=INDICE(IV)
